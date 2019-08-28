@@ -8,7 +8,7 @@ import (
 )
 
 func TestBasicSetGet(t *testing.T) {
-	bs := blockstore.NewBlockstore(ds.NewMapDatastore())
+	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
 
 	a := NewAMT(bs)
 
@@ -59,7 +59,7 @@ func assertGet(t testing.TB, r *Root, i uint64, val string) {
 }
 
 func TestExpand(t *testing.T) {
-	bs := blockstore.NewBlockstore(ds.NewMapDatastore())
+	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
 	a := NewAMT(bs)
 
 	if err := a.Set(2, "foo"); err != nil {
@@ -94,7 +94,7 @@ func TestExpand(t *testing.T) {
 }
 
 func TestInsertABunch(t *testing.T) {
-	bs := blockstore.NewBlockstore(ds.NewMapDatastore())
+	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
 	a := NewAMT(bs)
 
 	num := uint64(5000)
@@ -127,7 +127,7 @@ func TestInsertABunch(t *testing.T) {
 }
 
 func BenchmarkAMTInsertBulk(b *testing.B) {
-	bs := blockstore.NewBlockstore(ds.NewMapDatastore())
+	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
 	a := NewAMT(bs)
 
 	for i := uint64(b.N); i > 0; i-- {
@@ -140,7 +140,7 @@ func BenchmarkAMTInsertBulk(b *testing.B) {
 }
 
 func BenchmarkAMTLoadAndInsert(b *testing.B) {
-	bs := blockstore.NewBlockstore(ds.NewMapDatastore())
+	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
 	a := NewAMT(bs)
 	c, err := a.Flush()
 	if err != nil {

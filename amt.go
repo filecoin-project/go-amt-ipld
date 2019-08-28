@@ -7,6 +7,7 @@ import (
 	"math/bits"
 
 	blocks "github.com/ipfs/go-block-format"
+	blockstore "github.com/ipfs/go-ipfs-blockstore"
 	cbor "github.com/ipfs/go-ipld-cbor"
 	mh "github.com/multiformats/go-multihash"
 	cbg "github.com/whyrusleeping/cbor-gen"
@@ -35,8 +36,58 @@ type Node struct {
 }
 
 type Blocks interface {
-	Get(cid.Cid) (blocks.Block, error)
-	Put(blocks.Block) error
+	Get(cid.Cid, interface{}) error
+	Put(interface{}) (cid.Cid, error)
+}
+
+type bstoreWrapper struct {
+	bs blockstore.Blockstore
+}
+
+func (bw *bstoreWrapper) Get(c cid.Cid, out interface{}) error {
+	b, err := bw.bs.Get(c)
+	if err != nil {
+		return err
+	}
+
+	um, ok := out.(cbg.CBORUnmarshaler)
+	if !ok {
+		return fmt.Errorf("object was not a CBORUnmarshaler")
+	}
+	if err := um.UnmarshalCBOR(bytes.NewReader(b.RawData())); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (bw *bstoreWrapper) Put(obj interface{}) (cid.Cid, error) {
+	cbm, ok := obj.(cbg.CBORMarshaler)
+	if !ok {
+		return cid.Undef, fmt.Errorf("object was not a CBORMarshaler")
+	}
+
+	buf := new(bytes.Buffer)
+	if err := cbm.MarshalCBOR(buf); err != nil {
+		return cid.Undef, err
+	}
+
+	pref := cid.NewPrefixV1(cid.DagCBOR, mh.BLAKE2B_MIN+31)
+	c, err := pref.Sum(buf.Bytes())
+	if err != nil {
+		return cid.Undef, err
+	}
+
+	blk, err := blocks.NewBlockWithCid(buf.Bytes(), c)
+	if err != nil {
+		return cid.Undef, err
+	}
+
+	if err := bw.bs.Put(blk); err != nil {
+		return cid.Undef, err
+	}
+
+	return blk.Cid(), nil
 }
 
 func NewAMT(bs Blocks) *Root {
@@ -46,15 +97,11 @@ func NewAMT(bs Blocks) *Root {
 }
 
 func LoadAMT(bs Blocks, c cid.Cid) (*Root, error) {
-	b, err := bs.Get(c)
-	if err != nil {
+	var r Root
+	if err := bs.Get(c, &r); err != nil {
 		return nil, err
 	}
 
-	var r Root
-	if err := r.UnmarshalCBOR(bytes.NewReader(b.RawData())); err != nil {
-		return nil, err
-	}
 	r.bs = bs
 
 	return &r, nil
@@ -83,7 +130,7 @@ func (r *Root) Set(i uint64, val interface{}) error {
 				return err
 			}
 
-			c, err := putObjectCbor(r.bs, &r.Node)
+			c, err := r.bs.Put(&r.Node)
 			if err != nil {
 				return err
 			}
@@ -219,15 +266,11 @@ func (n *Node) loadNode(bs Blocks, i uint64) (*Node, error) {
 
 	var subn *Node
 	if set {
-		blk, err := bs.Get(n.expLinks[i])
-		if err != nil {
+		var sn Node
+		if err := bs.Get(n.expLinks[i], &sn); err != nil {
 			return nil, err
 		}
 
-		var sn Node
-		if err := sn.UnmarshalCBOR(bytes.NewReader(blk.RawData())); err != nil {
-			return nil, err
-		}
 		subn = &sn
 	} else {
 		subn = &Node{}
@@ -247,12 +290,12 @@ func (r *Root) Flush() (cid.Cid, error) {
 		return cid.Undef, err
 	}
 
-	return putObjectCbor(r.bs, r)
+	return r.bs.Put(r)
 }
 
 func (n *Node) empty() bool {
 	// TODO: probably a simpler way to do this check but i'm kinda tired right now
-	return len(n.expLinks) == 0 && len(n.cache) == 0 && len(n.Links) == 0 && len(n.Values) == 0 && len(n.expVals) == 0
+	return len(n.expLinks) == 0 && len(n.cache) == 0 && len(n.Links) == 0 && len(n.Values) == 0 && len(n.expVals) == 0 && (len(n.Bmap) == 0 || n.Bmap[0] == 0)
 }
 
 func (n *Node) Flush(bs Blocks, depth int) error {
@@ -287,7 +330,7 @@ func (n *Node) Flush(bs Blocks, depth int) error {
 				return err
 			}
 
-			c, err := putObjectCbor(bs, subn)
+			c, err := bs.Put(subn)
 			if err != nil {
 				return err
 			}
@@ -302,29 +345,4 @@ func (n *Node) Flush(bs Blocks, depth int) error {
 	}
 
 	return nil
-}
-
-func putObjectCbor(bs Blocks, obj cbg.CBORMarshaler) (cid.Cid, error) {
-	buf := new(bytes.Buffer)
-	if err := obj.MarshalCBOR(buf); err != nil {
-		return cid.Undef, err
-	}
-
-	pref := cid.NewPrefixV1(cid.DagCBOR, mh.BLAKE2B_MIN+31)
-	c, err := pref.Sum(buf.Bytes())
-	if err != nil {
-		return cid.Undef, err
-	}
-
-	blk, err := blocks.NewBlockWithCid(buf.Bytes(), c)
-	if err != nil {
-		return cid.Undef, err
-	}
-
-	if err := bs.Put(blk); err != nil {
-		return cid.Undef, err
-	}
-
-	return blk.Cid(), nil
-
 }
