@@ -12,18 +12,9 @@ func TestBasicSetGet(t *testing.T) {
 
 	a := NewAMT(bs)
 
-	if err := a.Set(2, "foo"); err != nil {
-		t.Fatal(err)
-	}
-
-	var out string
-	if err := a.Get(2, &out); err != nil {
-		t.Fatal(err)
-	}
-
-	if out != "foo" {
-		t.Fatal("value didnt come out right")
-	}
+	assertSet(t, a, 2, "foo")
+	assertGet(t, a, 2, "foo")
+	assertCount(t, a, 1)
 
 	c, err := a.Flush()
 	if err != nil {
@@ -35,20 +26,26 @@ func TestBasicSetGet(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var out2 string
-	if err := clean.Get(2, &out2); err != nil {
-		t.Fatal(err)
-	}
+	assertGet(t, clean, 2, "foo")
+
+	assertCount(t, clean, 1)
 }
 
-func assertSet(t *testing.T, r *Root, i uint, val string) {
+func assertSet(t *testing.T, r *Root, i uint64, val string) {
 	t.Helper()
 	if err := r.Set(i, val); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func assertGet(t *testing.T, r *Root, i uint, val string) {
+func assertCount(t testing.TB, r *Root, c uint64) {
+	t.Helper()
+	if r.Count != c {
+		t.Fatal("count is wrong")
+	}
+}
+
+func assertGet(t testing.TB, r *Root, i uint64, val string) {
 	t.Helper()
 
 	var out string
@@ -100,15 +97,15 @@ func TestInsertABunch(t *testing.T) {
 	bs := blockstore.NewBlockstore(ds.NewMapDatastore())
 	a := NewAMT(bs)
 
-	num := uint(5000)
+	num := uint64(5000)
 
-	for i := uint(0); i < num; i++ {
+	for i := uint64(0); i < num; i++ {
 		if err := a.Set(i, "foo foo bar"); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	for i := uint(0); i < num; i++ {
+	for i := uint64(0); i < num; i++ {
 		assertGet(t, a, i, "foo foo bar")
 	}
 
@@ -122,20 +119,24 @@ func TestInsertABunch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for i := uint(0); i < num; i++ {
+	for i := uint64(0); i < num; i++ {
 		assertGet(t, na, i, "foo foo bar")
 	}
+
+	assertCount(t, na, num)
 }
 
 func BenchmarkAMTInsertBulk(b *testing.B) {
 	bs := blockstore.NewBlockstore(ds.NewMapDatastore())
 	a := NewAMT(bs)
 
-	for i := uint(b.N); i > 0; i-- {
+	for i := uint64(b.N); i > 0; i-- {
 		if err := a.Set(i, "some value"); err != nil {
 			b.Fatal(err)
 		}
 	}
+
+	assertCount(b, a, uint64(b.N))
 }
 
 func BenchmarkAMTLoadAndInsert(b *testing.B) {
@@ -146,7 +147,7 @@ func BenchmarkAMTLoadAndInsert(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	for i := uint(b.N); i > 0; i-- {
+	for i := uint64(b.N); i > 0; i-- {
 		na, err := LoadAMT(bs, c)
 		if err != nil {
 			b.Fatal(err)

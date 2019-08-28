@@ -18,6 +18,7 @@ const width = 8
 
 type Root struct {
 	Height uint64
+	Count  uint64
 	Node   Node
 
 	bs Blocks
@@ -59,7 +60,7 @@ func LoadAMT(bs Blocks, c cid.Cid) (*Root, error) {
 	return &r, nil
 }
 
-func (r *Root) Set(i uint, val interface{}) error {
+func (r *Root) Set(i uint64, val interface{}) error {
 
 	var b []byte
 	if m, ok := val.(cbg.CBORMarshaler); ok {
@@ -95,14 +96,23 @@ func (r *Root) Set(i uint, val interface{}) error {
 		r.Height++
 	}
 
-	return r.Node.set(r.bs, int(r.Height), i, &cbg.Deferred{Raw: b})
+	addVal, err := r.Node.set(r.bs, int(r.Height), i, &cbg.Deferred{Raw: b})
+	if err != nil {
+		return err
+	}
+
+	if addVal {
+		r.Count++
+	}
+
+	return nil
 }
 
-func (r *Root) Get(i uint, out interface{}) error {
+func (r *Root) Get(i uint64, out interface{}) error {
 	return r.Node.get(r.bs, int(r.Height), i, out)
 }
 
-func (n *Node) get(bs Blocks, height int, i uint, out interface{}) error {
+func (n *Node) get(bs Blocks, height int, i uint64, out interface{}) error {
 	subi := i / nodesForHeight(width, height)
 	set, _ := n.getBit(subi)
 	if !set {
@@ -131,7 +141,7 @@ func (n *Node) get(bs Blocks, height int, i uint, out interface{}) error {
 func (n *Node) expandValues() {
 	if len(n.expVals) == 0 {
 		n.expVals = make([]*cbg.Deferred, width)
-		for x := uint(0); x < width; x++ {
+		for x := uint64(0); x < width; x++ {
 			set, ix := n.getBit(x)
 			if set {
 				n.expVals[x] = n.Values[ix]
@@ -140,25 +150,27 @@ func (n *Node) expandValues() {
 	}
 }
 
-func (n *Node) set(bs Blocks, height int, i uint, val *cbg.Deferred) error {
+func (n *Node) set(bs Blocks, height int, i uint64, val *cbg.Deferred) (bool, error) {
 	if height == 0 {
 		n.expandValues()
+		alreadySet, _ := n.getBit(i)
 		n.expVals[i] = val
 		n.setBit(i)
-		return nil
+
+		return !alreadySet, nil
 	}
 
 	nfh := nodesForHeight(width, height)
 
 	subn, err := n.loadNode(bs, i/nfh)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	return subn.set(bs, height-1, i%nfh, val)
 }
 
-func (n *Node) getBit(i uint) (bool, int) {
+func (n *Node) getBit(i uint64) (bool, int) {
 	if i > 7 {
 		panic("cant deal with wider arrays yet")
 	}
@@ -175,7 +187,7 @@ func (n *Node) getBit(i uint) (bool, int) {
 	return true, bits.OnesCount8(n.Bmap[0] & mask)
 }
 
-func (n *Node) setBit(i uint) {
+func (n *Node) setBit(i uint64) {
 	if i > 7 {
 		panic("cant deal with wider arrays yet")
 	}
@@ -187,11 +199,11 @@ func (n *Node) setBit(i uint) {
 	n.Bmap[0] = n.Bmap[0] | byte(1<<i)
 }
 
-func (n *Node) loadNode(bs Blocks, i uint) (*Node, error) {
+func (n *Node) loadNode(bs Blocks, i uint64) (*Node, error) {
 	if n.cache == nil {
 		n.cache = make([]*Node, width)
 		n.expLinks = make([]cid.Cid, width)
-		for x := uint(0); x < width; x++ {
+		for x := uint64(0); x < width; x++ {
 			set, ix := n.getBit(x)
 			if set {
 				n.expLinks[x] = n.Links[ix]
@@ -226,8 +238,8 @@ func (n *Node) loadNode(bs Blocks, i uint) (*Node, error) {
 	return subn, nil
 }
 
-func nodesForHeight(width, height int) uint {
-	return uint(math.Pow(float64(width), float64(height)))
+func nodesForHeight(width, height int) uint64 {
+	return uint64(math.Pow(float64(width), float64(height)))
 }
 
 func (r *Root) Flush() (cid.Cid, error) {
@@ -250,7 +262,7 @@ func (n *Node) Flush(bs Blocks, depth int) error {
 		}
 		n.Bmap = []byte{0}
 		n.Values = nil
-		for i := uint(0); i < width; i++ {
+		for i := uint64(0); i < width; i++ {
 			v := n.expVals[i]
 			if v != nil {
 				n.Values = append(n.Values, v)
@@ -268,7 +280,7 @@ func (n *Node) Flush(bs Blocks, depth int) error {
 	n.Bmap = []byte{0}
 	n.Links = nil
 
-	for i := uint(0); i < width; i++ {
+	for i := uint64(0); i < width; i++ {
 		subn := n.cache[i]
 		if subn != nil {
 			if err := subn.Flush(bs, depth-1); err != nil {
