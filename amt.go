@@ -163,7 +163,7 @@ func (n *Node) get(bs Blocks, height int, i uint64, out interface{}) error {
 	subi := i / nodesForHeight(width, height)
 	set, _ := n.getBit(subi)
 	if !set {
-		return fmt.Errorf("no item found at index")
+		return &ErrNotFound{i}
 	}
 	if height == 0 {
 		n.expandValues()
@@ -345,4 +345,16 @@ func (n *Node) Flush(bs Blocks, depth int) error {
 	}
 
 	return nil
+}
+
+type ErrNotFound struct {
+	Index uint64
+}
+
+func (e ErrNotFound) Error() string {
+	return fmt.Sprintf("Index %d not found in AMT", e.Index)
+}
+
+func (e ErrNotFound) IsNotFound() bool {
+	return true
 }
