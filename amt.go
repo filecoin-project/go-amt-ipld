@@ -355,6 +355,6 @@ func (e ErrNotFound) Error() string {
 	return fmt.Sprintf("Index %d not found in AMT", e.Index)
 }
 
-func (e ErrNotFound) IsNotFound() bool {
+func (e ErrNotFound) NotFound() bool {
 	return true
 }
