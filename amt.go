@@ -208,6 +208,46 @@ func (n *Node) get(bs Blocks, height int, i uint64, out interface{}) error {
 	return subn.get(bs, height-1, i%nodesForHeight(width, height), out)
 }
 
+func (r *Root) ForEach(cb func(uint64, *cbg.Deferred) error) error {
+	return r.Node.forEach(r.bs, int(r.Height), 0, cb)
+}
+
+func (n *Node) forEach(bs Blocks, height int, offset uint64, cb func(uint64, *cbg.Deferred) error) error {
+	if height == 0 {
+		n.expandValues()
+
+		for i, v := range n.expVals {
+			if v != nil {
+				if err := cb(offset+uint64(i), v); err != nil {
+					return err
+				}
+			}
+		}
+
+		return nil
+	}
+
+	if n.cache == nil {
+		n.expandLinks()
+	}
+
+	subCount := nodesForHeight(width, height)
+	for i, v := range n.expLinks {
+		if v != cid.Undef {
+			var sub Node
+			if err := bs.Get(v, &sub); err != nil {
+				return err
+			}
+
+			offs := offset + (uint64(i) * subCount)
+			if err := sub.forEach(bs, height-1, offs, cb); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (n *Node) expandValues() {
 	if len(n.expVals) == 0 {
 		n.expVals = make([]*cbg.Deferred, width)
@@ -269,16 +309,20 @@ func (n *Node) setBit(i uint64) {
 	n.Bmap[0] = n.Bmap[0] | byte(1<<i)
 }
 
+func (n *Node) expandLinks() {
+	n.cache = make([]*Node, width)
+	n.expLinks = make([]cid.Cid, width)
+	for x := uint64(0); x < width; x++ {
+		set, ix := n.getBit(x)
+		if set {
+			n.expLinks[x] = n.Links[ix]
+		}
+	}
+}
+
 func (n *Node) loadNode(bs Blocks, i uint64) (*Node, error) {
 	if n.cache == nil {
-		n.cache = make([]*Node, width)
-		n.expLinks = make([]cid.Cid, width)
-		for x := uint64(0); x < width; x++ {
-			set, ix := n.getBit(x)
-			if set {
-				n.expLinks[x] = n.Links[ix]
-			}
-		}
+		n.expandLinks()
 	} else {
 		if n := n.cache[i]; n != nil {
 			return n, nil
