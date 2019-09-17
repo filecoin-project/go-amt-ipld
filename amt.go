@@ -155,6 +155,16 @@ func (r *Root) Set(i uint64, val interface{}) error {
 	return nil
 }
 
+func (r *Root) BatchSet(vals []cbg.CBORMarshaler) error {
+	// TODO: there are more optimized ways of doing this method
+	for i, v := range vals {
+		if err := r.Set(uint64(i), v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *Root) Get(i uint64, out interface{}) error {
 	return r.Node.get(r.bs, int(r.Height), i, out)
 }
