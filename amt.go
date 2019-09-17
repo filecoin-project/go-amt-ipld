@@ -155,6 +155,15 @@ func (r *Root) Set(i uint64, val interface{}) error {
 	return nil
 }
 
+func FromArray(bs Blocks, vals []cbg.CBORMarshaler) (cid.Cid, error) {
+	r := NewAMT(bs)
+	if err := r.BatchSet(vals); err != nil {
+		return cid.Undef, err
+	}
+
+	return r.Flush()
+}
+
 func (r *Root) BatchSet(vals []cbg.CBORMarshaler) error {
 	// TODO: there are more optimized ways of doing this method
 	for i, v := range vals {
