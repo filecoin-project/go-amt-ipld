@@ -44,6 +44,10 @@ type bstoreWrapper struct {
 	bs blockstore.Blockstore
 }
 
+func WrapBlockstore(bs blockstore.Blockstore) Blocks {
+	return &bstoreWrapper{bs}
+}
+
 func (bw *bstoreWrapper) Get(c cid.Cid, out interface{}) error {
 	b, err := bw.bs.Get(c)
 	if err != nil {
