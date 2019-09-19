@@ -211,7 +211,7 @@ func (n *Node) get(bs Blocks, height int, i uint64, out interface{}) error {
 	return subn.get(bs, height-1, i%nodesForHeight(width, height), out)
 }
 
-func (r *Root) BulkDelete(indices []uint64) error {
+func (r *Root) BatchDelete(indices []uint64) error {
 	// TODO: theres a faster way of doing this, but this works for now
 	for _, i := range indices {
 		if err := r.Delete(i); err != nil {
