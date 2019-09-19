@@ -228,7 +228,7 @@ func (r *Root) Delete(i uint64) error {
 	}
 	r.Count--
 
-	for r.Node.Bmap[0] == 1 {
+	for r.Node.Bmap[0] == 1 && r.Height > 0 {
 		sub, err := r.Node.loadNode(r.bs, 0, false)
 		if err != nil {
 			return err
@@ -383,7 +383,7 @@ func (n *Node) clearBit(i uint64) {
 		panic("invariant violated: called clear bit on empty node")
 	}
 
-	mask := byte(((1 << 8) - 1) - (1 << i))
+	mask := byte(0xff - (1 << i))
 
 	n.Bmap[0] = n.Bmap[0] & mask
 }

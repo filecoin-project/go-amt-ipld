@@ -152,6 +152,28 @@ func TestInsertABunch(t *testing.T) {
 	assertCount(t, na, num)
 }
 
+func TestDeleteFirstEntry(t *testing.T) {
+	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
+	a := NewAMT(bs)
+
+	assertSet(t, a, 0, "cat")
+	assertSet(t, a, 27, "cat")
+
+	assertDelete(t, a, 27)
+
+	c, err := a.Flush()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	na, err := LoadAMT(bs, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertCount(t, na, 1)
+}
+
 func TestDelete(t *testing.T) {
 	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
 	a := NewAMT(bs)
