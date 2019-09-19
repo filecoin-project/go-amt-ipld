@@ -179,6 +179,9 @@ func (r *Root) BatchSet(vals []cbg.CBORMarshaler) error {
 }
 
 func (r *Root) Get(i uint64, out interface{}) error {
+	if i >= nodesForHeight(width, int(r.Height+1)) {
+		return &ErrNotFound{Index: i}
+	}
 	return r.Node.get(r.bs, int(r.Height), i, out)
 }
 
@@ -200,12 +203,74 @@ func (n *Node) get(bs Blocks, height int, i uint64, out interface{}) error {
 		}
 	}
 
-	subn, err := n.loadNode(bs, subi)
+	subn, err := n.loadNode(bs, subi, false)
 	if err != nil {
 		return err
 	}
 
 	return subn.get(bs, height-1, i%nodesForHeight(width, height), out)
+}
+
+func (r *Root) BatchDelete(indices []uint64) error {
+	// TODO: theres a faster way of doing this, but this works for now
+	for _, i := range indices {
+		if err := r.Delete(i); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (r *Root) Delete(i uint64) error {
+	if err := r.Node.delete(r.bs, int(r.Height), i); err != nil {
+		return err
+	}
+	r.Count--
+
+	for r.Node.Bmap[0] == 1 && r.Height > 0 {
+		sub, err := r.Node.loadNode(r.bs, 0, false)
+		if err != nil {
+			return err
+		}
+
+		r.Node = *sub
+		r.Height--
+	}
+
+	return nil
+}
+
+func (n *Node) delete(bs Blocks, height int, i uint64) error {
+	subi := i / nodesForHeight(width, height)
+	set, _ := n.getBit(subi)
+	if !set {
+		return &ErrNotFound{i}
+	}
+	if height == 0 {
+		n.expandValues()
+
+		n.expVals[i] = nil
+		n.clearBit(i)
+
+		return nil
+	}
+
+	subn, err := n.loadNode(bs, subi, false)
+	if err != nil {
+		return err
+	}
+
+	if err := subn.delete(bs, height-1, i%nodesForHeight(width, height)); err != nil {
+		return err
+	}
+
+	if subn.empty() {
+		n.clearBit(subi)
+		n.cache[subi] = nil
+	}
+
+	return nil
 }
 
 func (r *Root) ForEach(cb func(uint64, *cbg.Deferred) error) error {
@@ -272,7 +337,7 @@ func (n *Node) set(bs Blocks, height int, i uint64, val *cbg.Deferred) (bool, er
 
 	nfh := nodesForHeight(width, height)
 
-	subn, err := n.loadNode(bs, i/nfh)
+	subn, err := n.loadNode(bs, i/nfh, true)
 	if err != nil {
 		return false, err
 	}
@@ -309,6 +374,20 @@ func (n *Node) setBit(i uint64) {
 	n.Bmap[0] = n.Bmap[0] | byte(1<<i)
 }
 
+func (n *Node) clearBit(i uint64) {
+	if i > 7 {
+		panic("cant deal with wider arrays yet")
+	}
+
+	if len(n.Bmap) == 0 {
+		panic("invariant violated: called clear bit on empty node")
+	}
+
+	mask := byte(0xff - (1 << i))
+
+	n.Bmap[0] = n.Bmap[0] & mask
+}
+
 func (n *Node) expandLinks() {
 	n.cache = make([]*Node, width)
 	n.expLinks = make([]cid.Cid, width)
@@ -320,7 +399,7 @@ func (n *Node) expandLinks() {
 	}
 }
 
-func (n *Node) loadNode(bs Blocks, i uint64) (*Node, error) {
+func (n *Node) loadNode(bs Blocks, i uint64, create bool) (*Node, error) {
 	if n.cache == nil {
 		n.expandLinks()
 	} else {
@@ -340,8 +419,12 @@ func (n *Node) loadNode(bs Blocks, i uint64) (*Node, error) {
 
 		subn = &sn
 	} else {
-		subn = &Node{}
-		n.setBit(i)
+		if create {
+			subn = &Node{}
+			n.setBit(i)
+		} else {
+			return nil, fmt.Errorf("no node found at (sub)index %d", i)
+		}
 	}
 	n.cache[i] = subn
 
@@ -361,8 +444,7 @@ func (r *Root) Flush() (cid.Cid, error) {
 }
 
 func (n *Node) empty() bool {
-	// TODO: probably a simpler way to do this check but i'm kinda tired right now
-	return len(n.expLinks) == 0 && len(n.cache) == 0 && len(n.Links) == 0 && len(n.Values) == 0 && len(n.expVals) == 0 && (len(n.Bmap) == 0 || n.Bmap[0] == 0)
+	return len(n.Bmap) == 0 || n.Bmap[0] == 0
 }
 
 func (n *Node) Flush(bs Blocks, depth int) error {

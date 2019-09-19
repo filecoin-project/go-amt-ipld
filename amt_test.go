@@ -1,6 +1,7 @@
 package amt
 
 import (
+	"fmt"
 	"math/rand"
 	"testing"
 
@@ -31,6 +32,29 @@ func TestBasicSetGet(t *testing.T) {
 	assertGet(t, clean, 2, "foo")
 
 	assertCount(t, clean, 1)
+}
+
+func assertDelete(t *testing.T, r *Root, i uint64) {
+	t.Helper()
+	if err := r.Delete(i); err != nil {
+		t.Fatal(err)
+	}
+
+	err := r.Get(i, nil)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	enf, ok := err.(*ErrNotFound)
+	if !ok {
+		t.Fatal("got wrong error: ", err)
+	}
+
+	_ = enf
+	/* TODO: do the errors better so this passes
+	if enf.Index != i {
+		t.Fatal("got error not found with wrong index?", enf)
+	}
+	*/
 }
 
 func assertSet(t *testing.T, r *Root, i uint64, val string) {
@@ -126,6 +150,128 @@ func TestInsertABunch(t *testing.T) {
 	}
 
 	assertCount(t, na, num)
+}
+
+func TestDeleteFirstEntry(t *testing.T) {
+	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
+	a := NewAMT(bs)
+
+	assertSet(t, a, 0, "cat")
+	assertSet(t, a, 27, "cat")
+
+	assertDelete(t, a, 27)
+
+	c, err := a.Flush()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	na, err := LoadAMT(bs, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertCount(t, na, 1)
+}
+
+func TestDelete(t *testing.T) {
+	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
+	a := NewAMT(bs)
+
+	assertSet(t, a, 0, "cat")
+	assertSet(t, a, 1, "cat")
+	assertSet(t, a, 2, "cat")
+	assertSet(t, a, 3, "cat")
+
+	assertDelete(t, a, 1)
+
+	assertGet(t, a, 0, "cat")
+	assertGet(t, a, 2, "cat")
+	assertGet(t, a, 3, "cat")
+
+	assertDelete(t, a, 0)
+	fmt.Printf("%b\n", a.Node.Bmap[0])
+	assertDelete(t, a, 2)
+	fmt.Printf("%b\n", a.Node.Bmap[0])
+	assertDelete(t, a, 3)
+	fmt.Printf("%b\n", a.Node.Bmap[0])
+
+	assertCount(t, a, 0)
+	fmt.Println("trying deeper operations now")
+
+	assertSet(t, a, 23, "dog")
+	fmt.Printf("%b\n", a.Node.Bmap[0])
+	assertSet(t, a, 24, "dog")
+	fmt.Printf("%b\n", a.Node.Bmap[0])
+
+	fmt.Println("FAILURE NEXT")
+	assertDelete(t, a, 23)
+	fmt.Printf("%b\n", a.Node.Bmap[0])
+
+	assertCount(t, a, 1)
+
+	c, err := a.Flush()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	na, err := LoadAMT(bs, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertCount(t, na, 1)
+
+	a2 := NewAMT(bs)
+	assertSet(t, a2, 24, "dog")
+
+	a2c, err := a2.Flush()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if c != a2c {
+		fmt.Printf("%#v\n", a)
+		fmt.Printf("%#v\n", na)
+		fmt.Printf("%#v\n", a2)
+		t.Fatal("unexpected cid", c, a2c)
+	}
+}
+
+func TestDeleteReduceHeight(t *testing.T) {
+	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
+	a := NewAMT(bs)
+
+	assertSet(t, a, 1, "thing")
+
+	c1, err := a.Flush()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertSet(t, a, 37, "other")
+
+	c2, err := a.Flush()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a2, err := LoadAMT(bs, c2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertDelete(t, a2, 37)
+	assertCount(t, a2, 1)
+
+	c3, err := a2.Flush()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if c1 != c3 {
+		t.Fatal("structures did not match after insert/delete")
+	}
 }
 
 func BenchmarkAMTInsertBulk(b *testing.B) {
