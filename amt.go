@@ -273,6 +273,14 @@ func (n *Node) delete(bs Blocks, height int, i uint64) error {
 	return nil
 }
 
+// Subtract removes all elements of 'or' from 'r'
+func (r *Root) Subtract(or *Root) error {
+	// TODO: as with other methods, there should be an optimized way of doing this
+	return or.ForEach(func(i uint64, _ *cbg.Deferred) error {
+		return r.Delete(i)
+	})
+}
+
 func (r *Root) ForEach(cb func(uint64, *cbg.Deferred) error) error {
 	return r.Node.forEach(r.bs, int(r.Height), 0, cb)
 }
