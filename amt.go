@@ -36,8 +36,8 @@ type Node struct {
 }
 
 type Blocks interface {
-	Get(cid.Cid, interface{}) error
-	Put(interface{}) (cid.Cid, error)
+	Get(cid.Cid, cbg.CBORUnmarshaler) error
+	Put(cbg.CBORMarshaler) (cid.Cid, error)
 }
 
 type bstoreWrapper struct {
@@ -48,31 +48,22 @@ func WrapBlockstore(bs blockstore.Blockstore) Blocks {
 	return &bstoreWrapper{bs}
 }
 
-func (bw *bstoreWrapper) Get(c cid.Cid, out interface{}) error {
+func (bw *bstoreWrapper) Get(c cid.Cid, out cbg.CBORUnmarshaler) error {
 	b, err := bw.bs.Get(c)
 	if err != nil {
 		return err
 	}
 
-	um, ok := out.(cbg.CBORUnmarshaler)
-	if !ok {
-		return fmt.Errorf("object was not a CBORUnmarshaler")
-	}
-	if err := um.UnmarshalCBOR(bytes.NewReader(b.RawData())); err != nil {
+	if err := out.UnmarshalCBOR(bytes.NewReader(b.RawData())); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (bw *bstoreWrapper) Put(obj interface{}) (cid.Cid, error) {
-	cbm, ok := obj.(cbg.CBORMarshaler)
-	if !ok {
-		return cid.Undef, fmt.Errorf("object was not a CBORMarshaler")
-	}
-
+func (bw *bstoreWrapper) Put(obj cbg.CBORMarshaler) (cid.Cid, error) {
 	buf := new(bytes.Buffer)
-	if err := cbm.MarshalCBOR(buf); err != nil {
+	if err := obj.MarshalCBOR(buf); err != nil {
 		return cid.Undef, err
 	}
 
