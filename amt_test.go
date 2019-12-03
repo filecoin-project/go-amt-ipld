@@ -32,6 +32,18 @@ func TestBasicSetGet(t *testing.T) {
 	assertGet(t, clean, 2, "foo")
 
 	assertCount(t, clean, 1)
+
+}
+
+func TestOutOfRange(t *testing.T) {
+	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
+
+	a := NewAMT(bs)
+
+	err := a.Set(1<<50, "what is up")
+	if err == nil {
+		t.Fatal("should have failed to set value out of range")
+	}
 }
 
 func assertDelete(t *testing.T, r *Root, i uint64) {
