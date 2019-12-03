@@ -13,9 +13,14 @@ import (
 	cbg "github.com/whyrusleeping/cbor-gen"
 
 	cid "github.com/ipfs/go-cid"
+	logging "github.com/ipfs/go-log"
 )
 
+var log = logging.Logger("amt")
+
 const width = 8
+
+var MaxIndex = uint64(1 << 40) // fairly arbitrary, but I don't want to overflow/underflow in nodesForHeight
 
 type Root struct {
 	Height uint64
@@ -103,6 +108,9 @@ func LoadAMT(bs Blocks, c cid.Cid) (*Root, error) {
 }
 
 func (r *Root) Set(i uint64, val interface{}) error {
+	if i >= MaxIndex {
+		return fmt.Errorf("index %d is out of range for the amt", i)
+	}
 
 	var b []byte
 	if m, ok := val.(cbg.CBORMarshaler); ok {
@@ -170,6 +178,10 @@ func (r *Root) BatchSet(vals []cbg.CBORMarshaler) error {
 }
 
 func (r *Root) Get(i uint64, out interface{}) error {
+	if i >= MaxIndex {
+		return fmt.Errorf("index %d is out of range for the amt", i)
+	}
+
 	if i >= nodesForHeight(width, int(r.Height+1)) {
 		return &ErrNotFound{Index: i}
 	}
@@ -214,6 +226,10 @@ func (r *Root) BatchDelete(indices []uint64) error {
 }
 
 func (r *Root) Delete(i uint64) error {
+	if i >= MaxIndex {
+		return fmt.Errorf("index %d is out of range for the amt", i)
+	}
+
 	if err := r.Node.delete(r.bs, int(r.Height), i); err != nil {
 		return err
 	}
@@ -431,7 +447,13 @@ func (n *Node) loadNode(bs Blocks, i uint64, create bool) (*Node, error) {
 }
 
 func nodesForHeight(width, height int) uint64 {
-	return uint64(math.Pow(float64(width), float64(height)))
+	val := math.Pow(float64(width), float64(height))
+	if val >= float64(math.MaxUint64) {
+		log.Errorf("nodesForHeight overflow! This should never happen, please report this if you see this log message")
+		return math.MaxUint64
+	}
+
+	return uint64(val)
 }
 
 func (r *Root) Flush() (cid.Cid, error) {
