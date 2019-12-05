@@ -44,6 +44,16 @@ func TestOutOfRange(t *testing.T) {
 	if err == nil {
 		t.Fatal("should have failed to set value out of range")
 	}
+
+	err = a.Set(MaxIndex, "what is up")
+	if err == nil {
+		t.Fatal("should have failed to set value out of range")
+	}
+
+	err = a.Set(MaxIndex-1, "what is up")
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func assertDelete(t *testing.T, r *Root, i uint64) {

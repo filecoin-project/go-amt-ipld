@@ -20,7 +20,7 @@ var log = logging.Logger("amt")
 
 const width = 8
 
-var MaxIndex = uint64(1 << 40) // fairly arbitrary, but I don't want to overflow/underflow in nodesForHeight
+var MaxIndex = uint64(1 << 48) // fairly arbitrary, but I don't want to overflow/underflow in nodesForHeight
 
 type Root struct {
 	Height uint64
