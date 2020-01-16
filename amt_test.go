@@ -184,7 +184,10 @@ type op struct {
 func TestChaos(t *testing.T) {
 	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
 	seed := time.Now().UnixNano()
-	seed = 1579200312848358622
+	//seed = 1579200312848358622 // FIXED
+	//seed = 1579202116615474412
+	//seed = 1579202774458659521
+	// all above are with ops=100,maxIndx=2000
 	r := rand.New(rand.NewSource(seed))
 	t.Logf("seed: %d", seed)
 
@@ -192,9 +195,9 @@ func TestChaos(t *testing.T) {
 	c, err := a.Flush()
 	assert.NoError(t, err)
 
-	ops := make([]op, 100)
+	ops := make([]op, 1000)
 	maxPerOp := 10
-	maxIndx := 2000
+	maxIndx := 20000
 	for i := range ops {
 		o := &ops[i]
 		o.del = r.Intn(10) < 4
@@ -357,6 +360,9 @@ func TestDeleteFirstEntry(t *testing.T) {
 func TestDelete(t *testing.T) {
 	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
 	a := NewAMT(bs)
+
+	err := a.Delete(200)
+	assert.EqualValues(t, &ErrNotFound{200}, err)
 
 	assertSet(t, a, 0, "cat")
 	assertSet(t, a, 1, "cat")

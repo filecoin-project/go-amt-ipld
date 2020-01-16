@@ -229,6 +229,10 @@ func (r *Root) Delete(i uint64) error {
 	if i >= MaxIndex {
 		return fmt.Errorf("index %d is out of range for the amt", i)
 	}
+	//fmt.Printf("i: %d, h: %d, nfh: %d\n", i, r.Height, nodesForHeight(width, int(r.Height)))
+	if i >= nodesForHeight(width, int(r.Height+1)) {
+		return &ErrNotFound{i}
+	}
 
 	if err := r.Node.delete(r.bs, int(r.Height), i); err != nil {
 		return err
@@ -275,6 +279,7 @@ func (n *Node) delete(bs Blocks, height int, i uint64) error {
 	if subn.empty() {
 		n.clearBit(subi)
 		n.cache[subi] = nil
+		n.expLinks[subi] = cid.Undef
 	}
 
 	return nil
@@ -341,10 +346,8 @@ func (n *Node) expandValues() {
 }
 
 func (n *Node) set(bs Blocks, height int, i uint64, val *cbg.Deferred) (bool, error) {
-	{
-		nfh := nodesForHeight(width, height)
-		fmt.Printf("[set] h: %d, i: %d, subi: %d\n", height, i, i/nfh)
-	}
+	//nfh := nodesForHeight(width, height)
+	//fmt.Printf("[set] h: %d, i: %d, subi: %d\n", height, i, i/nfh)
 	if height == 0 {
 		n.expandValues()
 		alreadySet, _ := n.getBit(i)
