@@ -361,6 +361,7 @@ func TestDelete(t *testing.T) {
 	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
 	a := NewAMT(bs)
 
+	// Check that deleting out of range of the current AMT fails as we expect it to
 	err := a.Delete(200)
 	assert.EqualValues(t, &ErrNotFound{200}, err)
 
