@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"testing"
+	"time"
 
 	ds "github.com/ipfs/go-datastore"
 	blockstore "github.com/ipfs/go-ipfs-blockstore"
@@ -172,6 +173,80 @@ func TestInsertABunch(t *testing.T) {
 	}
 
 	assertCount(t, na, num)
+}
+
+func TestInsertABunchWithDelete(t *testing.T) {
+	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
+	a := NewAMT(bs)
+
+	num := 12000
+	originSet := make(map[uint64]bool, num)
+	removeSet := make(map[uint64]bool, num)
+	var removeSetN int
+	var originSetN int
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	for i := 0; i < num; i++ {
+		originSet[uint64(r.Intn(num))] = true
+	}
+
+	for i := 0; i < 660; i++ {
+		k := uint64(r.Intn(num))
+		if originSet[k] {
+			removeSet[k] = true
+			removeSetN++
+		}
+	}
+
+	for i := uint64(0); i < uint64(num); i++ {
+		if originSet[i] {
+			if err := a.Set(i, "foo foo bar"); err != nil {
+				t.Fatal(err)
+			}
+			originSetN++
+		}
+	}
+
+	for i := uint64(0); i < uint64(num); i++ {
+		if originSet[i] {
+			assertGet(t, a, i, "foo foo bar")
+		}
+	}
+
+	c, err := a.Flush()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	na, err := LoadAMT(bs, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := uint64(0); i < uint64(num); i++ {
+		if removeSet[i] {
+			assertDelete(t, na, i)
+		}
+	}
+
+	c, err = na.Flush()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n2a, err := LoadAMT(bs, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Logf("originSN: %d, removeSN: %d; expected: %d, actual len(n2a): %d",
+		originSetN, removeSetN, originSetN-removeSetN, n2a.Count)
+	assertCount(t, n2a, uint64(originSetN-removeSetN))
+
+	for i := uint64(0); i < uint64(num); i++ {
+		if originSet[i] && !removeSet[i] {
+			assertGet(t, n2a, i, "foo foo bar")
+		}
+	}
 }
 
 func TestDeleteFirstEntry(t *testing.T) {
