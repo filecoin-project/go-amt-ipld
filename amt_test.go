@@ -8,6 +8,7 @@ import (
 
 	ds "github.com/ipfs/go-datastore"
 	blockstore "github.com/ipfs/go-ipfs-blockstore"
+	"github.com/stretchr/testify/assert"
 	cbg "github.com/whyrusleeping/cbor-gen"
 )
 
@@ -175,6 +176,90 @@ func TestInsertABunch(t *testing.T) {
 	assertCount(t, na, num)
 }
 
+type op struct {
+	del  bool
+	idxs []uint64
+}
+
+func TestChaos(t *testing.T) {
+	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
+	seed := time.Now().UnixNano()
+	seed = 1579200312848358622
+	r := rand.New(rand.NewSource(seed))
+	t.Logf("seed: %d", seed)
+
+	a := NewAMT(bs)
+	c, err := a.Flush()
+	assert.NoError(t, err)
+
+	ops := make([]op, 100)
+	maxPerOp := 10
+	maxIndx := 2000
+	for i := range ops {
+		o := &ops[i]
+		o.del = r.Intn(10) < 4
+		o.idxs = make([]uint64, r.Intn(maxPerOp))
+		for j := range o.idxs {
+			o.idxs[j] = uint64(r.Intn(maxIndx))
+		}
+	}
+
+	testMap := make(map[uint64]struct{})
+
+	for i, o := range ops {
+		a, err = LoadAMT(bs, c)
+		assert.NoError(t, err)
+
+		for _, index := range o.idxs {
+			if !o.del {
+				err := a.Set(index, "test")
+				testMap[index] = struct{}{}
+				assert.NoError(t, err)
+			} else {
+				err := a.Delete(index)
+				delete(testMap, index)
+				if err != nil {
+					if _, ok := err.(*ErrNotFound); !ok {
+						assert.NoError(t, err)
+					}
+				}
+			}
+
+		}
+
+		fail := false
+		correctLen := uint64(len(testMap))
+		if correctLen != a.Count {
+			t.Errorf("bad length before flush, correct: %d, Count: %d, i: %d", correctLen, a.Count, i)
+			fail = true
+		}
+
+		c, err = a.Flush()
+		assert.NoError(t, err)
+
+		a, err = LoadAMT(bs, c)
+		assert.NoError(t, err)
+		if correctLen != a.Count {
+			t.Errorf("bad length after flush, correct: %d, Count: %d, i: %d", correctLen, a.Count, i)
+			fail = true
+		}
+
+		var feCount uint64
+		a.ForEach(func(_ uint64, _ *cbg.Deferred) error {
+			feCount++
+			return nil
+		})
+		if correctLen != feCount {
+			t.Errorf("bad fe length after flush, correct: %d, Count: %d, i: %d", correctLen, feCount, i)
+			fail = true
+		}
+		if fail {
+			t.Logf("%+v", o)
+			t.FailNow()
+		}
+	}
+}
+
 func TestInsertABunchWithDelete(t *testing.T) {
 	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
 	a := NewAMT(bs)
@@ -182,9 +267,9 @@ func TestInsertABunchWithDelete(t *testing.T) {
 	num := 12000
 	originSet := make(map[uint64]bool, num)
 	removeSet := make(map[uint64]bool, num)
-	var removeSetN int
-	var originSetN int
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	seed := time.Now().UnixNano()
+	r := rand.New(rand.NewSource(seed))
+	t.Logf("seed: %d", seed)
 
 	for i := 0; i < num; i++ {
 		originSet[uint64(r.Intn(num))] = true
@@ -194,7 +279,6 @@ func TestInsertABunchWithDelete(t *testing.T) {
 		k := uint64(r.Intn(num))
 		if originSet[k] {
 			removeSet[k] = true
-			removeSetN++
 		}
 	}
 
@@ -203,7 +287,6 @@ func TestInsertABunchWithDelete(t *testing.T) {
 			if err := a.Set(i, "foo foo bar"); err != nil {
 				t.Fatal(err)
 			}
-			originSetN++
 		}
 	}
 
@@ -239,8 +322,8 @@ func TestInsertABunchWithDelete(t *testing.T) {
 	}
 
 	t.Logf("originSN: %d, removeSN: %d; expected: %d, actual len(n2a): %d",
-		originSetN, removeSetN, originSetN-removeSetN, n2a.Count)
-	assertCount(t, n2a, uint64(originSetN-removeSetN))
+		len(originSet), len(removeSet), len(originSet)-len(removeSet), n2a.Count)
+	assertCount(t, n2a, uint64(len(originSet)-len(removeSet)))
 
 	for i := uint64(0); i < uint64(num); i++ {
 		if originSet[i] && !removeSet[i] {

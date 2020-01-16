@@ -341,6 +341,10 @@ func (n *Node) expandValues() {
 }
 
 func (n *Node) set(bs Blocks, height int, i uint64, val *cbg.Deferred) (bool, error) {
+	{
+		nfh := nodesForHeight(width, height)
+		fmt.Printf("[set] h: %d, i: %d, subi: %d\n", height, i, i/nfh)
+	}
 	if height == 0 {
 		n.expandValues()
 		alreadySet, _ := n.getBit(i)
