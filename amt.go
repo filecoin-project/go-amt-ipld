@@ -2,18 +2,18 @@ package amt
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"math"
 	"math/bits"
 
 	blocks "github.com/ipfs/go-block-format"
+	cid "github.com/ipfs/go-cid"
 	blockstore "github.com/ipfs/go-ipfs-blockstore"
 	cbor "github.com/ipfs/go-ipld-cbor"
+	logging "github.com/ipfs/go-log"
 	mh "github.com/multiformats/go-multihash"
 	cbg "github.com/whyrusleeping/cbor-gen"
-
-	cid "github.com/ipfs/go-cid"
-	logging "github.com/ipfs/go-log"
 )
 
 var log = logging.Logger("amt")
@@ -41,8 +41,8 @@ type Node struct {
 }
 
 type Blocks interface {
-	Get(cid.Cid, cbg.CBORUnmarshaler) error
-	Put(cbg.CBORMarshaler) (cid.Cid, error)
+	Get(ctx context.Context, c cid.Cid, out interface{}) error
+	Put(ctx context.Context, v interface{}) (cid.Cid, error)
 }
 
 type bstoreWrapper struct {
@@ -53,41 +53,83 @@ func WrapBlockstore(bs blockstore.Blockstore) Blocks {
 	return &bstoreWrapper{bs}
 }
 
-func (bw *bstoreWrapper) Get(c cid.Cid, out cbg.CBORUnmarshaler) error {
-	b, err := bw.bs.Get(c)
+// Note: ctx not used.
+func (bw *bstoreWrapper) Get(ctx context.Context, c cid.Cid, out interface{}) error {
+	blk, err := bw.bs.Get(c)
 	if err != nil {
 		return err
 	}
 
-	if err := out.UnmarshalCBOR(bytes.NewReader(b.RawData())); err != nil {
-		return err
+	cu, ok := out.(cbg.CBORUnmarshaler)
+	if ok {
+		return cu.UnmarshalCBOR(bytes.NewReader(blk.RawData()))
 	}
-
-	return nil
+	return cbor.DecodeInto(blk.RawData(), out)
 }
 
-func (bw *bstoreWrapper) Put(obj cbg.CBORMarshaler) (cid.Cid, error) {
-	buf := new(bytes.Buffer)
-	if err := obj.MarshalCBOR(buf); err != nil {
-		return cid.Undef, err
+type cidProvider interface {
+	Cid() cid.Cid
+}
+
+// Note: ctx not used.
+func (bw *bstoreWrapper) Put(ctx context.Context, v interface{}) (cid.Cid, error) {
+	mhType := uint64(mh.BLAKE2B_MIN + 31)
+	mhLen := -1
+	codec := uint64(cid.DagCBOR)
+
+	var expCid cid.Cid
+	if c, ok := v.(cidProvider); ok {
+		pref := c.Cid().Prefix()
+		mhType = pref.MhType
+		mhLen = pref.MhLength
+		codec = pref.Codec
+		expCid = c.Cid()
 	}
 
-	pref := cid.NewPrefixV1(cid.DagCBOR, mh.BLAKE2B_MIN+31)
-	c, err := pref.Sum(buf.Bytes())
+	cm, ok := v.(cbg.CBORMarshaler)
+	if ok {
+		buf := new(bytes.Buffer)
+		if err := cm.MarshalCBOR(buf); err != nil {
+			return cid.Undef, err
+		}
+
+		pref := cid.Prefix{
+			Codec:    codec,
+			MhType:   mhType,
+			MhLength: mhLen,
+			Version:  1,
+		}
+		c, err := pref.Sum(buf.Bytes())
+		if err != nil {
+			return cid.Undef, err
+		}
+
+		blk, err := blocks.NewBlockWithCid(buf.Bytes(), c)
+		if err != nil {
+			return cid.Undef, err
+		}
+
+		if err := bw.bs.Put(blk); err != nil {
+			return cid.Undef, err
+		}
+
+		return blk.Cid(), nil
+	}
+
+	nd, err := cbor.WrapObject(v, mhType, mhLen)
 	if err != nil {
 		return cid.Undef, err
 	}
 
-	blk, err := blocks.NewBlockWithCid(buf.Bytes(), c)
-	if err != nil {
+	if err := bw.bs.Put(nd); err != nil {
 		return cid.Undef, err
 	}
 
-	if err := bw.bs.Put(blk); err != nil {
-		return cid.Undef, err
+	if expCid != cid.Undef && nd.Cid() != expCid {
+		return cid.Undef, fmt.Errorf("your object is not being serialized the way it expects to")
 	}
 
-	return blk.Cid(), nil
+	return nd.Cid(), nil
 }
 
 func NewAMT(bs Blocks) *Root {
@@ -98,7 +140,7 @@ func NewAMT(bs Blocks) *Root {
 
 func LoadAMT(bs Blocks, c cid.Cid) (*Root, error) {
 	var r Root
-	if err := bs.Get(c, &r); err != nil {
+	if err := bs.Get(context.TODO(), c, &r); err != nil {
 		return nil, err
 	}
 
@@ -133,7 +175,7 @@ func (r *Root) Set(i uint64, val interface{}) error {
 				return err
 			}
 
-			c, err := r.bs.Put(&r.Node)
+			c, err := r.bs.Put(context.TODO(), &r.Node)
 			if err != nil {
 				return err
 			}
@@ -320,7 +362,7 @@ func (n *Node) forEach(bs Blocks, height int, offset uint64, cb func(uint64, *cb
 	for i, v := range n.expLinks {
 		if v != cid.Undef {
 			var sub Node
-			if err := bs.Get(v, &sub); err != nil {
+			if err := bs.Get(context.TODO(), v, &sub); err != nil {
 				return err
 			}
 
@@ -435,7 +477,7 @@ func (n *Node) loadNode(bs Blocks, i uint64, create bool) (*Node, error) {
 	var subn *Node
 	if set {
 		var sn Node
-		if err := bs.Get(n.expLinks[i], &sn); err != nil {
+		if err := bs.Get(context.TODO(), n.expLinks[i], &sn); err != nil {
 			return nil, err
 		}
 
@@ -468,7 +510,7 @@ func (r *Root) Flush() (cid.Cid, error) {
 		return cid.Undef, err
 	}
 
-	return r.bs.Put(r)
+	return r.bs.Put(context.TODO(), r)
 }
 
 func (n *Node) empty() bool {
@@ -507,7 +549,7 @@ func (n *Node) Flush(bs Blocks, depth int) error {
 				return err
 			}
 
-			c, err := bs.Put(subn)
+			c, err := bs.Put(context.TODO(), subn)
 			if err != nil {
 				return err
 			}

@@ -17,10 +17,10 @@ func main() {
 	if err := cbg.PrintHeaderAndUtilityMethods(fi, "amt"); err != nil {
 		panic(err)
 	}
-	if err := cbg.GenTupleEncodersForType(amt.Root{}, fi); err != nil {
+	if err := cbg.GenTupleEncodersForType("amt", amt.Root{}, fi); err != nil {
 		panic(err)
 	}
-	if err := cbg.GenTupleEncodersForType(amt.Node{}, fi); err != nil {
+	if err := cbg.GenTupleEncodersForType("amt", amt.Node{}, fi); err != nil {
 		panic(err)
 	}
 }
