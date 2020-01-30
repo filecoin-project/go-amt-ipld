@@ -2,18 +2,15 @@ package amt
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"math"
 	"math/bits"
 
-	blocks "github.com/ipfs/go-block-format"
-	blockstore "github.com/ipfs/go-ipfs-blockstore"
-	cbor "github.com/ipfs/go-ipld-cbor"
-	mh "github.com/multiformats/go-multihash"
-	cbg "github.com/whyrusleeping/cbor-gen"
-
 	cid "github.com/ipfs/go-cid"
+	cbor "github.com/ipfs/go-ipld-cbor"
 	logging "github.com/ipfs/go-log"
+	cbg "github.com/whyrusleeping/cbor-gen"
 )
 
 var log = logging.Logger("amt")
@@ -27,7 +24,7 @@ type Root struct {
 	Count  uint64
 	Node   Node
 
-	bs Blocks
+	store cbor.IpldStore
 }
 
 type Node struct {
@@ -40,74 +37,24 @@ type Node struct {
 	cache    []*Node
 }
 
-type Blocks interface {
-	Get(cid.Cid, cbg.CBORUnmarshaler) error
-	Put(cbg.CBORMarshaler) (cid.Cid, error)
-}
-
-type bstoreWrapper struct {
-	bs blockstore.Blockstore
-}
-
-func WrapBlockstore(bs blockstore.Blockstore) Blocks {
-	return &bstoreWrapper{bs}
-}
-
-func (bw *bstoreWrapper) Get(c cid.Cid, out cbg.CBORUnmarshaler) error {
-	b, err := bw.bs.Get(c)
-	if err != nil {
-		return err
-	}
-
-	if err := out.UnmarshalCBOR(bytes.NewReader(b.RawData())); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (bw *bstoreWrapper) Put(obj cbg.CBORMarshaler) (cid.Cid, error) {
-	buf := new(bytes.Buffer)
-	if err := obj.MarshalCBOR(buf); err != nil {
-		return cid.Undef, err
-	}
-
-	pref := cid.NewPrefixV1(cid.DagCBOR, mh.BLAKE2B_MIN+31)
-	c, err := pref.Sum(buf.Bytes())
-	if err != nil {
-		return cid.Undef, err
-	}
-
-	blk, err := blocks.NewBlockWithCid(buf.Bytes(), c)
-	if err != nil {
-		return cid.Undef, err
-	}
-
-	if err := bw.bs.Put(blk); err != nil {
-		return cid.Undef, err
-	}
-
-	return blk.Cid(), nil
-}
-
-func NewAMT(bs Blocks) *Root {
+func NewAMT(bs cbor.IpldStore) *Root {
 	return &Root{
-		bs: bs,
+		store: bs,
 	}
 }
 
-func LoadAMT(bs Blocks, c cid.Cid) (*Root, error) {
+func LoadAMT(ctx context.Context, bs cbor.IpldStore, c cid.Cid) (*Root, error) {
 	var r Root
-	if err := bs.Get(c, &r); err != nil {
+	if err := bs.Get(ctx, c, &r); err != nil {
 		return nil, err
 	}
 
-	r.bs = bs
+	r.store = bs
 
 	return &r, nil
 }
 
-func (r *Root) Set(i uint64, val interface{}) error {
+func (r *Root) Set(ctx context.Context, i uint64, val interface{}) error {
 	if i >= MaxIndex {
 		return fmt.Errorf("index %d is out of range for the amt", i)
 	}
@@ -129,11 +76,11 @@ func (r *Root) Set(i uint64, val interface{}) error {
 
 	for i >= nodesForHeight(width, int(r.Height)+1) {
 		if !r.Node.empty() {
-			if err := r.Node.Flush(r.bs, int(r.Height)); err != nil {
+			if err := r.Node.Flush(ctx, r.store, int(r.Height)); err != nil {
 				return err
 			}
 
-			c, err := r.bs.Put(&r.Node)
+			c, err := r.store.Put(ctx, &r.Node)
 			if err != nil {
 				return err
 			}
@@ -146,7 +93,7 @@ func (r *Root) Set(i uint64, val interface{}) error {
 		r.Height++
 	}
 
-	addVal, err := r.Node.set(r.bs, int(r.Height), i, &cbg.Deferred{Raw: b})
+	addVal, err := r.Node.set(ctx, r.store, int(r.Height), i, &cbg.Deferred{Raw: b})
 	if err != nil {
 		return err
 	}
@@ -158,26 +105,26 @@ func (r *Root) Set(i uint64, val interface{}) error {
 	return nil
 }
 
-func FromArray(bs Blocks, vals []cbg.CBORMarshaler) (cid.Cid, error) {
+func FromArray(ctx context.Context, bs cbor.IpldStore, vals []cbg.CBORMarshaler) (cid.Cid, error) {
 	r := NewAMT(bs)
-	if err := r.BatchSet(vals); err != nil {
+	if err := r.BatchSet(ctx, vals); err != nil {
 		return cid.Undef, err
 	}
 
-	return r.Flush()
+	return r.Flush(ctx)
 }
 
-func (r *Root) BatchSet(vals []cbg.CBORMarshaler) error {
+func (r *Root) BatchSet(ctx context.Context, vals []cbg.CBORMarshaler) error {
 	// TODO: there are more optimized ways of doing this method
 	for i, v := range vals {
-		if err := r.Set(uint64(i), v); err != nil {
+		if err := r.Set(ctx, uint64(i), v); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r *Root) Get(i uint64, out interface{}) error {
+func (r *Root) Get(ctx context.Context, i uint64, out interface{}) error {
 	if i >= MaxIndex {
 		return fmt.Errorf("index %d is out of range for the amt", i)
 	}
@@ -185,10 +132,10 @@ func (r *Root) Get(i uint64, out interface{}) error {
 	if i >= nodesForHeight(width, int(r.Height+1)) {
 		return &ErrNotFound{Index: i}
 	}
-	return r.Node.get(r.bs, int(r.Height), i, out)
+	return r.Node.get(ctx, r.store, int(r.Height), i, out)
 }
 
-func (n *Node) get(bs Blocks, height int, i uint64, out interface{}) error {
+func (n *Node) get(ctx context.Context, bs cbor.IpldStore, height int, i uint64, out interface{}) error {
 	subi := i / nodesForHeight(width, height)
 	set, _ := n.getBit(subi)
 	if !set {
@@ -206,18 +153,18 @@ func (n *Node) get(bs Blocks, height int, i uint64, out interface{}) error {
 		}
 	}
 
-	subn, err := n.loadNode(bs, subi, false)
+	subn, err := n.loadNode(ctx, bs, subi, false)
 	if err != nil {
 		return err
 	}
 
-	return subn.get(bs, height-1, i%nodesForHeight(width, height), out)
+	return subn.get(ctx, bs, height-1, i%nodesForHeight(width, height), out)
 }
 
-func (r *Root) BatchDelete(indices []uint64) error {
+func (r *Root) BatchDelete(ctx context.Context, indices []uint64) error {
 	// TODO: theres a faster way of doing this, but this works for now
 	for _, i := range indices {
-		if err := r.Delete(i); err != nil {
+		if err := r.Delete(ctx, i); err != nil {
 			return err
 		}
 	}
@@ -225,7 +172,7 @@ func (r *Root) BatchDelete(indices []uint64) error {
 	return nil
 }
 
-func (r *Root) Delete(i uint64) error {
+func (r *Root) Delete(ctx context.Context, i uint64) error {
 	if i >= MaxIndex {
 		return fmt.Errorf("index %d is out of range for the amt", i)
 	}
@@ -234,13 +181,13 @@ func (r *Root) Delete(i uint64) error {
 		return &ErrNotFound{i}
 	}
 
-	if err := r.Node.delete(r.bs, int(r.Height), i); err != nil {
+	if err := r.Node.delete(ctx, r.store, int(r.Height), i); err != nil {
 		return err
 	}
 	r.Count--
 
 	for r.Node.Bmap[0] == 1 && r.Height > 0 {
-		sub, err := r.Node.loadNode(r.bs, 0, false)
+		sub, err := r.Node.loadNode(ctx, r.store, 0, false)
 		if err != nil {
 			return err
 		}
@@ -252,7 +199,7 @@ func (r *Root) Delete(i uint64) error {
 	return nil
 }
 
-func (n *Node) delete(bs Blocks, height int, i uint64) error {
+func (n *Node) delete(ctx context.Context, bs cbor.IpldStore, height int, i uint64) error {
 	subi := i / nodesForHeight(width, height)
 	set, _ := n.getBit(subi)
 	if !set {
@@ -267,12 +214,12 @@ func (n *Node) delete(bs Blocks, height int, i uint64) error {
 		return nil
 	}
 
-	subn, err := n.loadNode(bs, subi, false)
+	subn, err := n.loadNode(ctx, bs, subi, false)
 	if err != nil {
 		return err
 	}
 
-	if err := subn.delete(bs, height-1, i%nodesForHeight(width, height)); err != nil {
+	if err := subn.delete(ctx, bs, height-1, i%nodesForHeight(width, height)); err != nil {
 		return err
 	}
 
@@ -286,18 +233,18 @@ func (n *Node) delete(bs Blocks, height int, i uint64) error {
 }
 
 // Subtract removes all elements of 'or' from 'r'
-func (r *Root) Subtract(or *Root) error {
+func (r *Root) Subtract(ctx context.Context, or *Root) error {
 	// TODO: as with other methods, there should be an optimized way of doing this
-	return or.ForEach(func(i uint64, _ *cbg.Deferred) error {
-		return r.Delete(i)
+	return or.ForEach(ctx, func(i uint64, _ *cbg.Deferred) error {
+		return r.Delete(ctx, i)
 	})
 }
 
-func (r *Root) ForEach(cb func(uint64, *cbg.Deferred) error) error {
-	return r.Node.forEach(r.bs, int(r.Height), 0, cb)
+func (r *Root) ForEach(ctx context.Context, cb func(uint64, *cbg.Deferred) error) error {
+	return r.Node.forEach(ctx, r.store, int(r.Height), 0, cb)
 }
 
-func (n *Node) forEach(bs Blocks, height int, offset uint64, cb func(uint64, *cbg.Deferred) error) error {
+func (n *Node) forEach(ctx context.Context, bs cbor.IpldStore, height int, offset uint64, cb func(uint64, *cbg.Deferred) error) error {
 	if height == 0 {
 		n.expandValues()
 
@@ -320,12 +267,12 @@ func (n *Node) forEach(bs Blocks, height int, offset uint64, cb func(uint64, *cb
 	for i, v := range n.expLinks {
 		if v != cid.Undef {
 			var sub Node
-			if err := bs.Get(v, &sub); err != nil {
+			if err := bs.Get(ctx, v, &sub); err != nil {
 				return err
 			}
 
 			offs := offset + (uint64(i) * subCount)
-			if err := sub.forEach(bs, height-1, offs, cb); err != nil {
+			if err := sub.forEach(ctx, bs, height-1, offs, cb); err != nil {
 				return err
 			}
 		}
@@ -345,7 +292,7 @@ func (n *Node) expandValues() {
 	}
 }
 
-func (n *Node) set(bs Blocks, height int, i uint64, val *cbg.Deferred) (bool, error) {
+func (n *Node) set(ctx context.Context, bs cbor.IpldStore, height int, i uint64, val *cbg.Deferred) (bool, error) {
 	//nfh := nodesForHeight(width, height)
 	//fmt.Printf("[set] h: %d, i: %d, subi: %d\n", height, i, i/nfh)
 	if height == 0 {
@@ -359,12 +306,12 @@ func (n *Node) set(bs Blocks, height int, i uint64, val *cbg.Deferred) (bool, er
 
 	nfh := nodesForHeight(width, height)
 
-	subn, err := n.loadNode(bs, i/nfh, true)
+	subn, err := n.loadNode(ctx, bs, i/nfh, true)
 	if err != nil {
 		return false, err
 	}
 
-	return subn.set(bs, height-1, i%nfh, val)
+	return subn.set(ctx, bs, height-1, i%nfh, val)
 }
 
 func (n *Node) getBit(i uint64) (bool, int) {
@@ -421,7 +368,7 @@ func (n *Node) expandLinks() {
 	}
 }
 
-func (n *Node) loadNode(bs Blocks, i uint64, create bool) (*Node, error) {
+func (n *Node) loadNode(ctx context.Context, bs cbor.IpldStore, i uint64, create bool) (*Node, error) {
 	if n.cache == nil {
 		n.expandLinks()
 	} else {
@@ -435,7 +382,7 @@ func (n *Node) loadNode(bs Blocks, i uint64, create bool) (*Node, error) {
 	var subn *Node
 	if set {
 		var sn Node
-		if err := bs.Get(n.expLinks[i], &sn); err != nil {
+		if err := bs.Get(ctx, n.expLinks[i], &sn); err != nil {
 			return nil, err
 		}
 
@@ -463,19 +410,19 @@ func nodesForHeight(width, height int) uint64 {
 	return uint64(val)
 }
 
-func (r *Root) Flush() (cid.Cid, error) {
-	if err := r.Node.Flush(r.bs, int(r.Height)); err != nil {
+func (r *Root) Flush(ctx context.Context) (cid.Cid, error) {
+	if err := r.Node.Flush(ctx, r.store, int(r.Height)); err != nil {
 		return cid.Undef, err
 	}
 
-	return r.bs.Put(r)
+	return r.store.Put(ctx, r)
 }
 
 func (n *Node) empty() bool {
 	return len(n.Bmap) == 0 || n.Bmap[0] == 0
 }
 
-func (n *Node) Flush(bs Blocks, depth int) error {
+func (n *Node) Flush(ctx context.Context, bs cbor.IpldStore, depth int) error {
 	if depth == 0 {
 		if len(n.expVals) == 0 {
 			return nil
@@ -503,11 +450,11 @@ func (n *Node) Flush(bs Blocks, depth int) error {
 	for i := uint64(0); i < width; i++ {
 		subn := n.cache[i]
 		if subn != nil {
-			if err := subn.Flush(bs, depth-1); err != nil {
+			if err := subn.Flush(ctx, bs, depth-1); err != nil {
 				return err
 			}
 
-			c, err := bs.Put(subn)
+			c, err := bs.Put(ctx, subn)
 			if err != nil {
 				return err
 			}

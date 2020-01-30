@@ -1,70 +1,96 @@
 package amt
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"testing"
 	"time"
 
-	ds "github.com/ipfs/go-datastore"
-	blockstore "github.com/ipfs/go-ipfs-blockstore"
-	"github.com/stretchr/testify/assert"
+	block "github.com/ipfs/go-block-format"
+	cid "github.com/ipfs/go-cid"
+	cbor "github.com/ipfs/go-ipld-cbor"
+	assert "github.com/stretchr/testify/assert"
 	cbg "github.com/whyrusleeping/cbor-gen"
 )
 
-func TestBasicSetGet(t *testing.T) {
-	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
+type mockBlocks struct {
+	data map[cid.Cid]block.Block
+}
 
+func newMockBlocks() *mockBlocks {
+	return &mockBlocks{make(map[cid.Cid]block.Block)}
+}
+
+func (mb *mockBlocks) Get(c cid.Cid) (block.Block, error) {
+	d, ok := mb.data[c]
+	if ok {
+		return d, nil
+	}
+	return nil, fmt.Errorf("Not Found")
+}
+
+func (mb *mockBlocks) Put(b block.Block) error {
+	mb.data[b.Cid()] = b
+	return nil
+}
+
+func TestBasicSetGet(t *testing.T) {
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
 	a := NewAMT(bs)
 
 	assertSet(t, a, 2, "foo")
-	assertGet(t, a, 2, "foo")
+	assertGet(ctx, t, a, 2, "foo")
 	assertCount(t, a, 1)
 
-	c, err := a.Flush()
+	c, err := a.Flush(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	clean, err := LoadAMT(bs, c)
+	clean, err := LoadAMT(ctx, bs, c)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	assertGet(t, clean, 2, "foo")
+	assertGet(ctx, t, clean, 2, "foo")
 
 	assertCount(t, clean, 1)
 
 }
 
 func TestOutOfRange(t *testing.T) {
-	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
+	ctx := context.Background()
+	bs := cbor.NewCborStore(newMockBlocks())
 
 	a := NewAMT(bs)
 
-	err := a.Set(1<<50, "what is up")
+	err := a.Set(ctx, 1<<50, "what is up")
 	if err == nil {
 		t.Fatal("should have failed to set value out of range")
 	}
 
-	err = a.Set(MaxIndex, "what is up")
+	err = a.Set(ctx, MaxIndex, "what is up")
 	if err == nil {
 		t.Fatal("should have failed to set value out of range")
 	}
 
-	err = a.Set(MaxIndex-1, "what is up")
+	err = a.Set(ctx, MaxIndex-1, "what is up")
 	if err != nil {
 		t.Fatal(err)
 	}
 }
 
 func assertDelete(t *testing.T, r *Root, i uint64) {
+	ctx := context.Background()
+
 	t.Helper()
-	if err := r.Delete(i); err != nil {
+	if err := r.Delete(ctx, i); err != nil {
 		t.Fatal(err)
 	}
 
-	err := r.Get(i, nil)
+	err := r.Get(ctx, i, nil)
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -82,8 +108,10 @@ func assertDelete(t *testing.T, r *Root, i uint64) {
 }
 
 func assertSet(t *testing.T, r *Root, i uint64, val string) {
+	ctx := context.Background()
+
 	t.Helper()
-	if err := r.Set(i, val); err != nil {
+	if err := r.Set(ctx, i, val); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -95,11 +123,12 @@ func assertCount(t testing.TB, r *Root, c uint64) {
 	}
 }
 
-func assertGet(t testing.TB, r *Root, i uint64, val string) {
+func assertGet(ctx context.Context, t testing.TB, r *Root, i uint64, val string) {
+
 	t.Helper()
 
 	var out string
-	if err := r.Get(i, &out); err != nil {
+	if err := r.Get(ctx, i, &out); err != nil {
 		t.Fatal(err)
 	}
 
@@ -109,68 +138,70 @@ func assertGet(t testing.TB, r *Root, i uint64, val string) {
 }
 
 func TestExpand(t *testing.T) {
-	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
 	a := NewAMT(bs)
 
-	if err := a.Set(2, "foo"); err != nil {
+	if err := a.Set(ctx, 2, "foo"); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := a.Set(11, "bar"); err != nil {
+	if err := a.Set(ctx, 11, "bar"); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := a.Set(79, "baz"); err != nil {
+	if err := a.Set(ctx, 79, "baz"); err != nil {
 		t.Fatal(err)
 	}
 
-	assertGet(t, a, 2, "foo")
-	assertGet(t, a, 11, "bar")
-	assertGet(t, a, 79, "baz")
+	assertGet(ctx, t, a, 2, "foo")
+	assertGet(ctx, t, a, 11, "bar")
+	assertGet(ctx, t, a, 79, "baz")
 
-	c, err := a.Flush()
+	c, err := a.Flush(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	na, err := LoadAMT(bs, c)
+	na, err := LoadAMT(ctx, bs, c)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	assertGet(t, na, 2, "foo")
-	assertGet(t, na, 11, "bar")
-	assertGet(t, na, 79, "baz")
+	assertGet(ctx, t, na, 2, "foo")
+	assertGet(ctx, t, na, 11, "bar")
+	assertGet(ctx, t, na, 79, "baz")
 }
 
 func TestInsertABunch(t *testing.T) {
-	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
 	a := NewAMT(bs)
 
 	num := uint64(5000)
 
 	for i := uint64(0); i < num; i++ {
-		if err := a.Set(i, "foo foo bar"); err != nil {
+		if err := a.Set(ctx, i, "foo foo bar"); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	for i := uint64(0); i < num; i++ {
-		assertGet(t, a, i, "foo foo bar")
+		assertGet(ctx, t, a, i, "foo foo bar")
 	}
 
-	c, err := a.Flush()
+	c, err := a.Flush(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	na, err := LoadAMT(bs, c)
+	na, err := LoadAMT(ctx, bs, c)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	for i := uint64(0); i < num; i++ {
-		assertGet(t, na, i, "foo foo bar")
+		assertGet(ctx, t, na, i, "foo foo bar")
 	}
 
 	assertCount(t, na, num)
@@ -182,8 +213,9 @@ type op struct {
 }
 
 func TestChaos(t *testing.T) {
-	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
+	bs := cbor.NewCborStore(newMockBlocks())
 	seed := time.Now().UnixNano()
+	ctx := context.Background()
 	//seed = 1579200312848358622 // FIXED
 	//seed = 1579202116615474412
 	//seed = 1579202774458659521
@@ -192,7 +224,7 @@ func TestChaos(t *testing.T) {
 	t.Logf("seed: %d", seed)
 
 	a := NewAMT(bs)
-	c, err := a.Flush()
+	c, err := a.Flush(ctx)
 	assert.NoError(t, err)
 
 	ops := make([]op, 1000)
@@ -210,16 +242,16 @@ func TestChaos(t *testing.T) {
 	testMap := make(map[uint64]struct{})
 
 	for i, o := range ops {
-		a, err = LoadAMT(bs, c)
+		a, err = LoadAMT(ctx, bs, c)
 		assert.NoError(t, err)
 
 		for _, index := range o.idxs {
 			if !o.del {
-				err := a.Set(index, "test")
+				err := a.Set(ctx, index, "test")
 				testMap[index] = struct{}{}
 				assert.NoError(t, err)
 			} else {
-				err := a.Delete(index)
+				err := a.Delete(ctx, index)
 				delete(testMap, index)
 				if err != nil {
 					if _, ok := err.(*ErrNotFound); !ok {
@@ -237,10 +269,10 @@ func TestChaos(t *testing.T) {
 			fail = true
 		}
 
-		c, err = a.Flush()
+		c, err = a.Flush(ctx)
 		assert.NoError(t, err)
 
-		a, err = LoadAMT(bs, c)
+		a, err = LoadAMT(ctx, bs, c)
 		assert.NoError(t, err)
 		if correctLen != a.Count {
 			t.Errorf("bad length after flush, correct: %d, Count: %d, i: %d", correctLen, a.Count, i)
@@ -248,7 +280,7 @@ func TestChaos(t *testing.T) {
 		}
 
 		var feCount uint64
-		a.ForEach(func(_ uint64, _ *cbg.Deferred) error {
+		a.ForEach(ctx, func(_ uint64, _ *cbg.Deferred) error {
 			feCount++
 			return nil
 		})
@@ -264,7 +296,8 @@ func TestChaos(t *testing.T) {
 }
 
 func TestInsertABunchWithDelete(t *testing.T) {
-	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
 	a := NewAMT(bs)
 
 	num := 12000
@@ -287,7 +320,7 @@ func TestInsertABunchWithDelete(t *testing.T) {
 
 	for i := uint64(0); i < uint64(num); i++ {
 		if originSet[i] {
-			if err := a.Set(i, "foo foo bar"); err != nil {
+			if err := a.Set(ctx, i, "foo foo bar"); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -295,16 +328,16 @@ func TestInsertABunchWithDelete(t *testing.T) {
 
 	for i := uint64(0); i < uint64(num); i++ {
 		if originSet[i] {
-			assertGet(t, a, i, "foo foo bar")
+			assertGet(ctx, t, a, i, "foo foo bar")
 		}
 	}
 
-	c, err := a.Flush()
+	c, err := a.Flush(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	na, err := LoadAMT(bs, c)
+	na, err := LoadAMT(ctx, bs, c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,11 +348,11 @@ func TestInsertABunchWithDelete(t *testing.T) {
 		}
 	}
 
-	c, err = na.Flush()
+	c, err = na.Flush(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	n2a, err := LoadAMT(bs, c)
+	n2a, err := LoadAMT(ctx, bs, c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,13 +363,14 @@ func TestInsertABunchWithDelete(t *testing.T) {
 
 	for i := uint64(0); i < uint64(num); i++ {
 		if originSet[i] && !removeSet[i] {
-			assertGet(t, n2a, i, "foo foo bar")
+			assertGet(ctx, t, n2a, i, "foo foo bar")
 		}
 	}
 }
 
 func TestDeleteFirstEntry(t *testing.T) {
-	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
 	a := NewAMT(bs)
 
 	assertSet(t, a, 0, "cat")
@@ -344,12 +378,12 @@ func TestDeleteFirstEntry(t *testing.T) {
 
 	assertDelete(t, a, 27)
 
-	c, err := a.Flush()
+	c, err := a.Flush(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	na, err := LoadAMT(bs, c)
+	na, err := LoadAMT(ctx, bs, c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,11 +392,12 @@ func TestDeleteFirstEntry(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
-	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
 	a := NewAMT(bs)
 
 	// Check that deleting out of range of the current AMT fails as we expect it to
-	err := a.Delete(200)
+	err := a.Delete(ctx, 200)
 	assert.EqualValues(t, &ErrNotFound{200}, err)
 
 	assertSet(t, a, 0, "cat")
@@ -372,9 +407,9 @@ func TestDelete(t *testing.T) {
 
 	assertDelete(t, a, 1)
 
-	assertGet(t, a, 0, "cat")
-	assertGet(t, a, 2, "cat")
-	assertGet(t, a, 3, "cat")
+	assertGet(ctx, t, a, 0, "cat")
+	assertGet(ctx, t, a, 2, "cat")
+	assertGet(ctx, t, a, 3, "cat")
 
 	assertDelete(t, a, 0)
 	fmt.Printf("%b\n", a.Node.Bmap[0])
@@ -397,12 +432,12 @@ func TestDelete(t *testing.T) {
 
 	assertCount(t, a, 1)
 
-	c, err := a.Flush()
+	c, err := a.Flush(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	na, err := LoadAMT(bs, c)
+	na, err := LoadAMT(ctx, bs, c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +447,7 @@ func TestDelete(t *testing.T) {
 	a2 := NewAMT(bs)
 	assertSet(t, a2, 24, "dog")
 
-	a2c, err := a2.Flush()
+	a2c, err := a2.Flush(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,24 +461,25 @@ func TestDelete(t *testing.T) {
 }
 
 func TestDeleteReduceHeight(t *testing.T) {
-	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
 	a := NewAMT(bs)
 
 	assertSet(t, a, 1, "thing")
 
-	c1, err := a.Flush()
+	c1, err := a.Flush(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	assertSet(t, a, 37, "other")
 
-	c2, err := a.Flush()
+	c2, err := a.Flush(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	a2, err := LoadAMT(bs, c2)
+	a2, err := LoadAMT(ctx, bs, c2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +487,7 @@ func TestDeleteReduceHeight(t *testing.T) {
 	assertDelete(t, a2, 37)
 	assertCount(t, a2, 1)
 
-	c3, err := a2.Flush()
+	c3, err := a2.Flush(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,11 +498,12 @@ func TestDeleteReduceHeight(t *testing.T) {
 }
 
 func BenchmarkAMTInsertBulk(b *testing.B) {
-	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
 	a := NewAMT(bs)
 
 	for i := uint64(b.N); i > 0; i-- {
-		if err := a.Set(i, "some value"); err != nil {
+		if err := a.Set(ctx, i, "some value"); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -475,23 +512,25 @@ func BenchmarkAMTInsertBulk(b *testing.B) {
 }
 
 func BenchmarkAMTLoadAndInsert(b *testing.B) {
-	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
 	a := NewAMT(bs)
-	c, err := a.Flush()
+
+	c, err := a.Flush(ctx)
 	if err != nil {
 		b.Fatal(err)
 	}
 
 	for i := uint64(b.N); i > 0; i-- {
-		na, err := LoadAMT(bs, c)
+		na, err := LoadAMT(ctx, bs, c)
 		if err != nil {
 			b.Fatal(err)
 		}
 
-		if err := na.Set(i, "some value"); err != nil {
+		if err := na.Set(ctx, i, "some value"); err != nil {
 			b.Fatal(err)
 		}
-		c, err = na.Flush()
+		c, err = na.Flush(ctx)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -499,7 +538,8 @@ func BenchmarkAMTLoadAndInsert(b *testing.B) {
 }
 
 func TestForEach(t *testing.T) {
-	bs := &bstoreWrapper{blockstore.NewBlockstore(ds.NewMapDatastore())}
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
 	a := NewAMT(bs)
 
 	r := rand.New(rand.NewSource(101))
@@ -512,23 +552,23 @@ func TestForEach(t *testing.T) {
 	}
 
 	for _, i := range indexes {
-		if err := a.Set(i, "value"); err != nil {
+		if err := a.Set(ctx, i, "value"); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	for _, i := range indexes {
-		assertGet(t, a, i, "value")
+		assertGet(ctx, t, a, i, "value")
 	}
 
 	assertCount(t, a, uint64(len(indexes)))
 
-	c, err := a.Flush()
+	c, err := a.Flush(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	na, err := LoadAMT(bs, c)
+	na, err := LoadAMT(ctx, bs, c)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -536,7 +576,7 @@ func TestForEach(t *testing.T) {
 	assertCount(t, na, uint64(len(indexes)))
 
 	var x int
-	err = na.ForEach(func(i uint64, v *cbg.Deferred) error {
+	err = na.ForEach(ctx, func(i uint64, v *cbg.Deferred) error {
 		if i != indexes[x] {
 			t.Fatal("got wrong index", i, indexes[x], x)
 		}

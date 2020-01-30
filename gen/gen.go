@@ -1,26 +1,14 @@
 package main
 
 import (
-	"os"
-
-	"github.com/filecoin-project/go-amt-ipld"
 	cbg "github.com/whyrusleeping/cbor-gen"
+
+	"github.com/filecoin-project/go-amt-ipld/v2"
 )
 
 func main() {
-	fi, err := os.Create("cbor_gen.go")
-	if err != nil {
-		panic(err)
-	}
-	defer fi.Close()
-
-	if err := cbg.PrintHeaderAndUtilityMethods(fi, "amt"); err != nil {
-		panic(err)
-	}
-	if err := cbg.GenTupleEncodersForType(amt.Root{}, fi); err != nil {
-		panic(err)
-	}
-	if err := cbg.GenTupleEncodersForType(amt.Node{}, fi); err != nil {
+	// FIXME this will not generate the correct code, leave the cbor_gen.go file untouched.
+	if err := cbg.WriteMapEncodersToFile("cbor_gen.go", "amt", amt.Root{}, amt.Node{}); err != nil {
 		panic(err)
 	}
 }
