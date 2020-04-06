@@ -241,15 +241,24 @@ func (r *Root) Subtract(ctx context.Context, or *Root) error {
 }
 
 func (r *Root) ForEach(ctx context.Context, cb func(uint64, *cbg.Deferred) error) error {
-	return r.Node.forEach(ctx, r.store, int(r.Height), 0, cb)
+	return r.Node.forEachAt(ctx, r.store, int(r.Height), 0, 0, cb)
 }
 
-func (n *Node) forEach(ctx context.Context, bs cbor.IpldStore, height int, offset uint64, cb func(uint64, *cbg.Deferred) error) error {
+func (r *Root) ForEachAt(ctx context.Context, start uint64, cb func(uint64, *cbg.Deferred) error) error {
+	return r.Node.forEachAt(ctx, r.store, int(r.Height), start, 0, cb)
+}
+
+func (n *Node) forEachAt(ctx context.Context, bs cbor.IpldStore, height int, start, offset uint64, cb func(uint64, *cbg.Deferred) error) error {
 	if height == 0 {
 		n.expandValues()
 
 		for i, v := range n.expVals {
 			if v != nil {
+				ix := offset + uint64(i)
+				if ix < start {
+					continue
+				}
+
 				if err := cb(offset+uint64(i), v); err != nil {
 					return err
 				}
@@ -266,18 +275,24 @@ func (n *Node) forEach(ctx context.Context, bs cbor.IpldStore, height int, offse
 	subCount := nodesForHeight(width, height)
 	for i, v := range n.expLinks {
 		if v != cid.Undef {
+			offs := offset + (uint64(i) * subCount)
+			nextOffs := offs + subCount
+			if start >= nextOffs {
+				continue
+			}
+
 			var sub Node
 			if err := bs.Get(ctx, v, &sub); err != nil {
 				return err
 			}
 
-			offs := offset + (uint64(i) * subCount)
-			if err := sub.forEach(ctx, bs, height-1, offs, cb); err != nil {
+			if err := sub.forEachAt(ctx, bs, height-1, start, offs, cb); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+
 }
 
 func (n *Node) expandValues() {

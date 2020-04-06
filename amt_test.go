@@ -590,3 +590,64 @@ func TestForEach(t *testing.T) {
 		t.Fatal("didnt see enough values")
 	}
 }
+
+func TestForEachAt(t *testing.T) {
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
+	a := NewAMT(bs)
+
+	r := rand.New(rand.NewSource(101))
+
+	var indexes []uint64
+	for i := 0; i < 10000; i++ {
+		if r.Intn(2) == 0 {
+			indexes = append(indexes, uint64(i))
+		}
+	}
+
+	for _, i := range indexes {
+		if err := a.Set(ctx, i, fmt.Sprint(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, i := range indexes {
+		assertGet(ctx, t, a, i, fmt.Sprint(i))
+	}
+
+	assertCount(t, a, uint64(len(indexes)))
+
+	c, err := a.Flush(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	na, err := LoadAMT(ctx, bs, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertCount(t, na, uint64(len(indexes)))
+
+	for try := 0; try < 10; try++ {
+		start := uint64(r.Intn(10000))
+
+		var x int
+		for ; indexes[x] < start; x++ {
+		}
+
+		err = na.ForEachAt(ctx, start, func(i uint64, v *cbg.Deferred) error {
+			if i != indexes[x] {
+				t.Fatal("got wrong index", i, indexes[x], x)
+			}
+			x++
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if x != len(indexes) {
+			t.Fatal("didnt see enough values")
+		}
+	}
+}
