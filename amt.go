@@ -295,6 +295,49 @@ func (n *Node) forEachAt(ctx context.Context, bs cbor.IpldStore, height int, sta
 
 }
 
+func (r *Root) FirstSetIndex(ctx context.Context) (uint64, error) {
+	return r.Node.firstSetIndex(ctx, r.store, int(r.Height))
+}
+
+var errNoVals = fmt.Errorf("no values")
+
+func (n *Node) firstSetIndex(ctx context.Context, bs cbor.IpldStore, height int) (uint64, error) {
+	if height == 0 {
+		n.expandValues()
+		for i, v := range n.expVals {
+			if v != nil {
+				return uint64(i), nil
+			}
+		}
+		// Would be really weird if we ever actually hit this
+		return 0, errNoVals
+	}
+
+	if n.cache == nil {
+		n.expandLinks()
+	}
+
+	for i := 0; i < width; i++ {
+		ok, _ := n.getBit(uint64(i))
+		if ok {
+			subn, err := n.loadNode(ctx, bs, uint64(i), false)
+			if err != nil {
+				return 0, err
+			}
+
+			ix, err := subn.firstSetIndex(ctx, bs, height-1)
+			if err != nil {
+				return 0, err
+			}
+
+			subCount := nodesForHeight(width, height)
+			return ix + (uint64(i) * subCount), nil
+		}
+	}
+
+	return 0, errNoVals
+}
+
 func (n *Node) expandValues() {
 	if len(n.expVals) == 0 {
 		n.expVals = make([]*cbg.Deferred, width)

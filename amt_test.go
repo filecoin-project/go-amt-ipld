@@ -651,3 +651,45 @@ func TestForEachAt(t *testing.T) {
 		}
 	}
 }
+
+func TestFirstSetIndex(t *testing.T) {
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
+
+	vals := []uint64{0, 1, 5, width, width + 1, 276, 1234, 62881923}
+	for _, v := range vals {
+		a := NewAMT(bs)
+		if err := a.Set(ctx, v, fmt.Sprint(v)); err != nil {
+			t.Fatal(err)
+		}
+
+		fsi, err := a.FirstSetIndex(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if fsi != v {
+			t.Fatal("got wrong index out", fsi, v)
+		}
+
+		rc, err := a.Flush(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		after, err := LoadAMT(ctx, bs, rc)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		fsi, err = after.FirstSetIndex(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if fsi != v {
+			t.Fatal("got wrong index out after serialization")
+		}
+	}
+
+}
