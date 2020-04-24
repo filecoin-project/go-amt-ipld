@@ -335,7 +335,6 @@ func (n *Node) firstSetIndex(ctx context.Context, bs cbor.IpldStore, height int)
 		}
 	}
 
-	fmt.Println("NO LINKS", n.expLinks)
 	return 0, errNoVals
 }
 
