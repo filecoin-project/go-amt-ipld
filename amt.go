@@ -3,14 +3,17 @@ package amt
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
-	"math"
-	"math/bits"
-
 	cid "github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
 	logging "github.com/ipfs/go-log"
 	cbg "github.com/whyrusleeping/cbor-gen"
+	"math"
+	"math/bits"
+	"os"
+	"strings"
+	"sync"
 )
 
 var log = logging.Logger("amt")
@@ -244,8 +247,16 @@ func (r *Root) ForEach(ctx context.Context, cb func(uint64, *cbg.Deferred) error
 	return r.Node.forEachAt(ctx, r.store, int(r.Height), 0, 0, cb)
 }
 
+func (r *Root) ParForEach(ctx context.Context, parNum int, cb func(uint64, *cbg.Deferred) error) error {
+	return r.Node.parForEachAt(ctx, r.store, int(r.Height), 0, 0, parNum, cb)
+}
+
 func (r *Root) ForEachAt(ctx context.Context, start uint64, cb func(uint64, *cbg.Deferred) error) error {
 	return r.Node.forEachAt(ctx, r.store, int(r.Height), start, 0, cb)
+}
+
+func (r *Root) ParForEachAt(ctx context.Context, start uint64, parNum int, cb func(uint64, *cbg.Deferred) error) error {
+	return r.Node.parForEachAt(ctx, r.store, int(r.Height), start, 0, parNum, cb)
 }
 
 func (n *Node) forEachAt(ctx context.Context, bs cbor.IpldStore, height int, start, offset uint64, cb func(uint64, *cbg.Deferred) error) error {
@@ -293,6 +304,50 @@ func (n *Node) forEachAt(ctx context.Context, bs cbor.IpldStore, height int, sta
 	}
 	return nil
 
+}
+
+func (n *Node) parForEachAt(ctx context.Context, bs cbor.IpldStore, height int, start, offset uint64, parNum int, cb func(uint64, *cbg.Deferred) error) error {
+	errCh := make(chan struct{})
+	toProcess := make(chan struct{}, parNum)
+	for i := 0; i < parNum; i++ {
+		toProcess <- struct{}{}
+	}
+
+	var wg sync.WaitGroup
+	multiErr := &MultiError{}
+	wrapCh := func(u uint64, deferred *cbg.Deferred) error {
+		select {
+		case <-errCh:
+			return errors.New("just for stop")
+		default:
+		}
+		wg.Add(1)
+		select {
+		case <-toProcess:
+			go func() {
+				defer func() {
+					wg.Done()
+				}()
+				if err := cb(u, deferred); err != nil {
+					multiErr.Add(err)
+					errCh <- struct{}{}
+				} else {
+					toProcess <- struct{}{}
+				}
+			}()
+		}
+		return nil
+	}
+
+	errFlag := n.forEachAt(ctx, bs, height, start, offset, wrapCh)
+	if errFlag != nil {
+		return multiErr
+	}
+	wg.Wait()
+	if len(multiErr.errs) == 0 {
+		return nil
+	}
+	return multiErr
 }
 
 func (r *Root) FirstSetIndex(ctx context.Context) (uint64, error) {
@@ -539,4 +594,26 @@ func (e ErrNotFound) Error() string {
 
 func (e ErrNotFound) NotFound() bool {
 	return true
+}
+
+type MultiError struct {
+	errs []error
+	lk   sync.Mutex
+}
+
+func (me *MultiError) Add(err error) {
+	me.lk.Lock()
+	me.errs = append(me.errs, err)
+	me.lk.Unlock()
+}
+
+func (me *MultiError) Error() string {
+	me.lk.Lock()
+	defer me.lk.Unlock()
+
+	var errStr []string
+	for _, err := range me.errs {
+		errStr = append(errStr, err.Error())
+	}
+	return strings.Join(errStr, string(os.PathSeparator))
 }

@@ -2,8 +2,10 @@ package amt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
+	"strconv"
 	"testing"
 	"time"
 
@@ -692,4 +694,95 @@ func TestFirstSetIndex(t *testing.T) {
 		}
 	}
 
+}
+
+func TestForParRead(t *testing.T) {
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
+	a := NewAMT(bs)
+
+	r := rand.New(rand.NewSource(101))
+
+	var indexes []uint64
+	for i := 0; i < 10000; i++ {
+		if r.Intn(2) == 0 {
+			indexes = append(indexes, uint64(i))
+		}
+	}
+
+	for _, i := range indexes {
+		if err := a.Set(ctx, i, strconv.Itoa(int(i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	assertCount(t, a, uint64(len(indexes)))
+
+	c, err := a.Flush(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	na, err := LoadAMT(ctx, bs, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertCount(t, na, uint64(len(indexes)))
+
+	err = na.ParForEach(ctx, 1000, func(i uint64, v *cbg.Deferred) error {
+		var val string
+		if err := cbor.DecodeInto(v.Raw, &val); err != nil {
+			return err
+		}
+		expected := strconv.Itoa(int(i))
+		if expected != val {
+			t.Fatal(fmt.Sprintf("read value error expected %s but got %s", expected, val))
+		}
+		time.Sleep(time.Millisecond * 100)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestForParReadErr(t *testing.T) {
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
+	a := NewAMT(bs)
+
+	for i := 10; i < 1000; i++ {
+		if err := a.Set(ctx, uint64(i), strconv.Itoa(int(i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	c, err := a.Flush(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	na, err := LoadAMT(ctx, bs, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = na.ParForEach(ctx, 100, func(i uint64, v *cbg.Deferred) error {
+		var val string
+		if err := cbor.DecodeInto(v.Raw, &val); err != nil {
+			return err
+		}
+		if i == 100 {
+			return errors.New("expect erro")
+		}
+		expected := strconv.Itoa(int(i))
+		if expected != val {
+			t.Fatal(fmt.Sprintf("read value error expected %s but got %s", expected, val))
+		}
+		return nil
+	})
+	if err != nil && err.Error() != "expect erro" {
+		log.Fatal("expect specific error but got %s", err)
+	}
 }
