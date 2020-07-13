@@ -16,11 +16,16 @@ var log = logging.Logger("amt")
 
 const (
 	// Width must be a power of 2. We set this to 8.
-	widthBits = 3
-	width     = 1 << widthBits
+	maxIndexBits = 63
+	widthBits    = 3
+	width        = 1 << widthBits             // 8
+	maxHeight    = maxIndexBits/widthBits - 1 // 20 (because the root is at height 0).
 )
 
-var MaxIndex = uint64(1 << 48) // fairly arbitrary, but I don't want to overflow/underflow in nodesForHeight
+// MaxIndex is the maximum index for elements in the AMT. This is currently 1^63
+// (max int) because the width is 8. That means every "level" consumes 3 bits
+// from the index, and 63/3 is a nice even 21
+const MaxIndex = uint64(1 << maxIndexBits)
 
 type Root struct {
 	Height uint64
@@ -50,6 +55,9 @@ func LoadAMT(ctx context.Context, bs cbor.IpldStore, c cid.Cid) (*Root, error) {
 	var r Root
 	if err := bs.Get(ctx, c, &r); err != nil {
 		return nil, err
+	}
+	if r.Height > maxHeight {
+		return nil, fmt.Errorf("failed to load AMT: height out of bounds: %d > %d", r.Height, maxHeight)
 	}
 
 	r.store = bs

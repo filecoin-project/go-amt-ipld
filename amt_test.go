@@ -66,7 +66,7 @@ func TestOutOfRange(t *testing.T) {
 
 	a := NewAMT(bs)
 
-	err := a.Set(ctx, 1<<50, "what is up")
+	err := a.Set(ctx, 1<<63+4, "what is up")
 	if err == nil {
 		t.Fatal("should have failed to set value out of range")
 	}
@@ -79,6 +79,9 @@ func TestOutOfRange(t *testing.T) {
 	err = a.Set(ctx, MaxIndex-1, "what is up")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if a.Height != maxHeight {
+		t.Fatal("expected to be at the maximum height")
 	}
 }
 
