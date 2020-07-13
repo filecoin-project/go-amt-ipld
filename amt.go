@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"math"
 	"math/bits"
 
 	cid "github.com/ipfs/go-cid"
@@ -15,7 +14,11 @@ import (
 
 var log = logging.Logger("amt")
 
-const width = 8
+const (
+	// Width must be a power of 2. We set this to 8.
+	widthBits = 3
+	width     = 1 << widthBits
+)
 
 var MaxIndex = uint64(1 << 48) // fairly arbitrary, but I don't want to overflow/underflow in nodesForHeight
 
@@ -74,7 +77,7 @@ func (r *Root) Set(ctx context.Context, i uint64, val interface{}) error {
 		}
 	}
 
-	for i >= nodesForHeight(width, int(r.Height)+1) {
+	for i >= nodesForHeight(int(r.Height)+1) {
 		if !r.Node.empty() {
 			if err := r.Node.Flush(ctx, r.store, int(r.Height)); err != nil {
 				return err
@@ -129,14 +132,14 @@ func (r *Root) Get(ctx context.Context, i uint64, out interface{}) error {
 		return fmt.Errorf("index %d is out of range for the amt", i)
 	}
 
-	if i >= nodesForHeight(width, int(r.Height+1)) {
+	if i >= nodesForHeight(int(r.Height+1)) {
 		return &ErrNotFound{Index: i}
 	}
 	return r.Node.get(ctx, r.store, int(r.Height), i, out)
 }
 
 func (n *Node) get(ctx context.Context, bs cbor.IpldStore, height int, i uint64, out interface{}) error {
-	subi := i / nodesForHeight(width, height)
+	subi := i / nodesForHeight(height)
 	set, _ := n.getBit(subi)
 	if !set {
 		return &ErrNotFound{i}
@@ -158,7 +161,7 @@ func (n *Node) get(ctx context.Context, bs cbor.IpldStore, height int, i uint64,
 		return err
 	}
 
-	return subn.get(ctx, bs, height-1, i%nodesForHeight(width, height), out)
+	return subn.get(ctx, bs, height-1, i%nodesForHeight(height), out)
 }
 
 func (r *Root) BatchDelete(ctx context.Context, indices []uint64) error {
@@ -176,8 +179,8 @@ func (r *Root) Delete(ctx context.Context, i uint64) error {
 	if i >= MaxIndex {
 		return fmt.Errorf("index %d is out of range for the amt", i)
 	}
-	//fmt.Printf("i: %d, h: %d, nfh: %d\n", i, r.Height, nodesForHeight(width, int(r.Height)))
-	if i >= nodesForHeight(width, int(r.Height+1)) {
+	//fmt.Printf("i: %d, h: %d, nfh: %d\n", i, r.Height, nodesForHeight(int(r.Height)))
+	if i >= nodesForHeight(int(r.Height+1)) {
 		return &ErrNotFound{i}
 	}
 
@@ -200,7 +203,7 @@ func (r *Root) Delete(ctx context.Context, i uint64) error {
 }
 
 func (n *Node) delete(ctx context.Context, bs cbor.IpldStore, height int, i uint64) error {
-	subi := i / nodesForHeight(width, height)
+	subi := i / nodesForHeight(height)
 	set, _ := n.getBit(subi)
 	if !set {
 		return &ErrNotFound{i}
@@ -219,7 +222,7 @@ func (n *Node) delete(ctx context.Context, bs cbor.IpldStore, height int, i uint
 		return err
 	}
 
-	if err := subn.delete(ctx, bs, height-1, i%nodesForHeight(width, height)); err != nil {
+	if err := subn.delete(ctx, bs, height-1, i%nodesForHeight(height)); err != nil {
 		return err
 	}
 
@@ -272,7 +275,7 @@ func (n *Node) forEachAt(ctx context.Context, bs cbor.IpldStore, height int, sta
 		n.expandLinks()
 	}
 
-	subCount := nodesForHeight(width, height)
+	subCount := nodesForHeight(height)
 	for i, v := range n.expLinks {
 		if v != cid.Undef {
 			offs := offset + (uint64(i) * subCount)
@@ -330,7 +333,7 @@ func (n *Node) firstSetIndex(ctx context.Context, bs cbor.IpldStore, height int)
 				return 0, err
 			}
 
-			subCount := nodesForHeight(width, height)
+			subCount := nodesForHeight(height)
 			return ix + (uint64(i) * subCount), nil
 		}
 	}
@@ -351,7 +354,7 @@ func (n *Node) expandValues() {
 }
 
 func (n *Node) set(ctx context.Context, bs cbor.IpldStore, height int, i uint64, val *cbg.Deferred) (bool, error) {
-	//nfh := nodesForHeight(width, height)
+	//nfh := nodesForHeight(height)
 	//fmt.Printf("[set] h: %d, i: %d, subi: %d\n", height, i, i/nfh)
 	if height == 0 {
 		n.expandValues()
@@ -362,7 +365,7 @@ func (n *Node) set(ctx context.Context, bs cbor.IpldStore, height int, i uint64,
 		return !alreadySet, nil
 	}
 
-	nfh := nodesForHeight(width, height)
+	nfh := nodesForHeight(height)
 
 	subn, err := n.loadNode(ctx, bs, i/nfh, true)
 	if err != nil {
@@ -458,14 +461,13 @@ func (n *Node) loadNode(ctx context.Context, bs cbor.IpldStore, i uint64, create
 	return subn, nil
 }
 
-func nodesForHeight(width, height int) uint64 {
-	val := math.Pow(float64(width), float64(height))
-	if val >= float64(math.MaxUint64) {
-		log.Errorf("nodesForHeight overflow! This should never happen, please report this if you see this log message")
-		return math.MaxUint64
+func nodesForHeight(height int) uint64 {
+	heightLogTwo := uint64(widthBits * height)
+	if heightLogTwo >= 64 {
+		// Should never happen. Max height is checked at all entry points.
+		panic("height overflow")
 	}
-
-	return uint64(val)
+	return 1 << heightLogTwo
 }
 
 func (r *Root) Flush(ctx context.Context) (cid.Cid, error) {
