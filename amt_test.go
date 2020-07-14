@@ -71,12 +71,12 @@ func TestOutOfRange(t *testing.T) {
 		t.Fatal("should have failed to set value out of range")
 	}
 
-	err = a.Set(ctx, MaxIndex, "what is up")
+	err = a.Set(ctx, MaxIndex+1, "what is up")
 	if err == nil {
 		t.Fatal("should have failed to set value out of range")
 	}
 
-	err = a.Set(ctx, MaxIndex-1, "what is up")
+	err = a.Set(ctx, MaxIndex, "what is up")
 	if err != nil {
 		t.Fatal(err)
 	}

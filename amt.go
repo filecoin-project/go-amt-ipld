@@ -25,7 +25,7 @@ const (
 // MaxIndex is the maximum index for elements in the AMT. This is currently 1^63
 // (max int) because the width is 8. That means every "level" consumes 3 bits
 // from the index, and 63/3 is a nice even 21
-const MaxIndex = uint64(1 << maxIndexBits)
+const MaxIndex = uint64(1<<maxIndexBits) - 1
 
 type Root struct {
 	Height uint64
@@ -66,7 +66,7 @@ func LoadAMT(ctx context.Context, bs cbor.IpldStore, c cid.Cid) (*Root, error) {
 }
 
 func (r *Root) Set(ctx context.Context, i uint64, val interface{}) error {
-	if i >= MaxIndex {
+	if i > MaxIndex {
 		return fmt.Errorf("index %d is out of range for the amt", i)
 	}
 
@@ -136,7 +136,7 @@ func (r *Root) BatchSet(ctx context.Context, vals []cbg.CBORMarshaler) error {
 }
 
 func (r *Root) Get(ctx context.Context, i uint64, out interface{}) error {
-	if i >= MaxIndex {
+	if i > MaxIndex {
 		return fmt.Errorf("index %d is out of range for the amt", i)
 	}
 
@@ -184,7 +184,7 @@ func (r *Root) BatchDelete(ctx context.Context, indices []uint64) error {
 }
 
 func (r *Root) Delete(ctx context.Context, i uint64) error {
-	if i >= MaxIndex {
+	if i > MaxIndex {
 		return fmt.Errorf("index %d is out of range for the amt", i)
 	}
 	//fmt.Printf("i: %d, h: %d, nfh: %d\n", i, r.Height, nodesForHeight(int(r.Height)))
