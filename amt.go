@@ -285,21 +285,25 @@ func (n *Node) forEachAt(ctx context.Context, bs cbor.IpldStore, height int, sta
 
 	subCount := nodesForHeight(height)
 	for i, v := range n.expLinks {
-		if v != cid.Undef {
-			offs := offset + (uint64(i) * subCount)
-			nextOffs := offs + subCount
-			if start >= nextOffs {
-				continue
-			}
-
-			var sub Node
+		var sub Node
+		if n.cache[i] != nil {
+			sub = *n.cache[i]
+		} else if v != cid.Undef {
 			if err := bs.Get(ctx, v, &sub); err != nil {
 				return err
 			}
+		} else {
+			continue
+		}
 
-			if err := sub.forEachAt(ctx, bs, height-1, start, offs, cb); err != nil {
-				return err
-			}
+		offs := offset + (uint64(i) * subCount)
+		nextOffs := offs + subCount
+		if start >= nextOffs {
+			continue
+		}
+
+		if err := sub.forEachAt(ctx, bs, height-1, start, offs, cb); err != nil {
+			return err
 		}
 	}
 	return nil

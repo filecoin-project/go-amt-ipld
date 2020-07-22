@@ -11,6 +11,7 @@ import (
 	cid "github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
 	assert "github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	cbg "github.com/whyrusleeping/cbor-gen"
 )
 
@@ -208,6 +209,45 @@ func TestInsertABunch(t *testing.T) {
 	}
 
 	assertCount(t, na, num)
+}
+
+func TestForEachWithoutFlush(t *testing.T) {
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
+
+	for _, vals := range [][]uint64{
+		{0, 1, 2, 3, 4, 5, 6, 7},
+		{8},
+		{8, 9, 64},
+		{64, 8, 9},
+	} {
+		amt := NewAMT(bs)
+		set1 := make(map[uint64]struct{})
+		set2 := make(map[uint64]struct{})
+		for _, val := range vals {
+			err := amt.Set(ctx, val, "")
+			require.NoError(t, err)
+
+			set1[val] = struct{}{}
+			set2[val] = struct{}{}
+		}
+
+		amt.ForEach(ctx, func(u uint64, deferred *cbg.Deferred) error {
+			delete(set1, u)
+			return nil
+		})
+		assert.Equal(t, make(map[uint64]struct{}), set1)
+
+		// ensure it still works after flush
+		_, err := amt.Flush(ctx)
+		require.NoError(t, err)
+
+		amt.ForEach(ctx, func(u uint64, deferred *cbg.Deferred) error {
+			delete(set2, u)
+			return nil
+		})
+		assert.Equal(t, make(map[uint64]struct{}), set2)
+	}
 }
 
 type op struct {
