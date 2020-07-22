@@ -116,7 +116,7 @@ func (t *Node) MarshalCBOR(w io.Writer) error {
 
 	scratch := make([]byte, 9)
 
-	// t.Bmap ([]uint8) (slice)
+	// t.Bmap ([1]uint8) (array)
 	if len(t.Bmap) > cbg.ByteArrayMaxLen {
 		return xerrors.Errorf("Byte array in field t.Bmap was too long")
 	}
@@ -125,7 +125,7 @@ func (t *Node) MarshalCBOR(w io.Writer) error {
 		return err
 	}
 
-	if _, err := w.Write(t.Bmap); err != nil {
+	if _, err := w.Write(t.Bmap[:]); err != nil {
 		return err
 	}
 
@@ -177,7 +177,7 @@ func (t *Node) UnmarshalCBOR(r io.Reader) error {
 		return fmt.Errorf("cbor input had wrong number of fields")
 	}
 
-	// t.Bmap ([]uint8) (slice)
+	// t.Bmap ([1]uint8) (array)
 
 	maj, extra, err = cbg.CborReadHeaderBuf(br, scratch)
 	if err != nil {
@@ -190,8 +190,14 @@ func (t *Node) UnmarshalCBOR(r io.Reader) error {
 	if maj != cbg.MajByteString {
 		return fmt.Errorf("expected byte array")
 	}
-	t.Bmap = make([]byte, extra)
-	if _, err := io.ReadFull(br, t.Bmap); err != nil {
+
+	if extra != 1 {
+		return fmt.Errorf("expected array to have 1 elements")
+	}
+
+	t.Bmap = [1]uint8{}
+
+	if _, err := io.ReadFull(br, t.Bmap[:]); err != nil {
 		return err
 	}
 	// t.Links ([]cid.Cid) (slice)
