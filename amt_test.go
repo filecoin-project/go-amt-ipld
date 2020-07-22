@@ -3,6 +3,7 @@ package amt
 import (
 	"context"
 	"fmt"
+	"github.com/stretchr/testify/require"
 	"math/rand"
 	"testing"
 	"time"
@@ -734,5 +735,30 @@ func TestFirstSetIndex(t *testing.T) {
 			t.Fatal("got wrong index out after serialization")
 		}
 	}
+}
 
+func TestEmptyCIDStability(t *testing.T) {
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
+	a := NewAMT(bs)
+
+	c1, err := a.Flush(ctx)
+	require.NoError(t, err)
+
+	// iterating array should not affect its cid
+	a.ForEach(ctx, func(k uint64, val *cbg.Deferred) error {
+		return nil
+	})
+
+	c2, err := a.Flush(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, c1, c2)
+
+	// adding and removing and item should not affect its cid
+	a.Set(ctx, 0, "")
+	a.Delete(ctx, 0)
+
+	c3, err := a.Flush(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, c1, c3)
 }

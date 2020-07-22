@@ -19,6 +19,7 @@ const (
 	maxIndexBits = 63
 	widthBits    = 3
 	width        = 1 << widthBits             // 8
+	bitfieldSize = 1                          // ((width - 1) >> 3) + 1
 	maxHeight    = maxIndexBits/widthBits - 1 // 20 (because the root is at height 0).
 )
 
@@ -36,7 +37,7 @@ type Root struct {
 }
 
 type Node struct {
-	Bmap   []byte
+	Bmap   [bitfieldSize]byte
 	Links  []cid.Cid
 	Values []*cbg.Deferred
 
@@ -97,7 +98,7 @@ func (r *Root) Set(ctx context.Context, i uint64, val interface{}) error {
 			}
 
 			r.Node = Node{
-				Bmap:  []byte{0x01},
+				Bmap:  [...]byte{0x01},
 				Links: []cid.Cid{c},
 			}
 		}
@@ -410,7 +411,7 @@ func (n *Node) setBit(i uint64) {
 	}
 
 	if len(n.Bmap) == 0 {
-		n.Bmap = []byte{0}
+		n.Bmap = [...]byte{0}
 	}
 
 	n.Bmap[0] = n.Bmap[0] | byte(1<<i)
@@ -499,7 +500,6 @@ func (n *Node) Flush(ctx context.Context, bs cbor.IpldStore, depth int) error {
 		if len(n.expVals) == 0 {
 			return nil
 		}
-		n.Bmap = []byte{0}
 		n.Values = nil
 		for i := uint64(0); i < width; i++ {
 			v := n.expVals[i]
@@ -516,7 +516,7 @@ func (n *Node) Flush(ctx context.Context, bs cbor.IpldStore, depth int) error {
 		return nil
 	}
 
-	n.Bmap = []byte{0}
+	n.Bmap = [...]byte{0}
 	n.Links = nil
 
 	for i := uint64(0); i < width; i++ {
