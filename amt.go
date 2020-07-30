@@ -500,6 +500,7 @@ func (n *Node) Flush(ctx context.Context, bs cbor.IpldStore, depth int) error {
 		if len(n.expVals) == 0 {
 			return nil
 		}
+	  n.Bmap = [...]byte{0}
 		n.Values = nil
 		for i := uint64(0); i < width; i++ {
 			v := n.expVals[i]

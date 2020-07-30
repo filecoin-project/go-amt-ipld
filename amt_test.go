@@ -3,7 +3,6 @@ package amt
 import (
 	"context"
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"math/rand"
 	"testing"
 	"time"
