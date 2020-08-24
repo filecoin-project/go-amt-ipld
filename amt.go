@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sort"
 
 	cid "github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
@@ -151,6 +152,15 @@ func (r *Root) Get(ctx context.Context, i uint64, out interface{}) error {
 
 func (r *Root) BatchDelete(ctx context.Context, indices []uint64) error {
 	// TODO: theres a faster way of doing this, but this works for now
+
+	// Sort by index so we can safely implement these optimizations in the future.
+	less := func(i, j int) bool { return indices[i] < indices[j] }
+	if !sort.SliceIsSorted(indices, less) {
+		// Copy first so we don't modify our inputs.
+		indices = append(indices[0:0:0], indices...)
+		sort.Slice(indices, less)
+	}
+
 	for _, i := range indices {
 		if err := r.Delete(ctx, i); err != nil {
 			return err
