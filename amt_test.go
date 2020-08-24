@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/filecoin-project/go-amt-ipld/v2/internal"
 	block "github.com/ipfs/go-block-format"
 	cid "github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
@@ -81,7 +82,7 @@ func TestOutOfRange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Height != maxHeight {
+	if a.height != internal.MaxHeight {
 		t.Fatal("expected to be at the maximum height")
 	}
 }
@@ -122,7 +123,7 @@ func assertSet(t *testing.T, r *Root, i uint64, val string) {
 
 func assertCount(t testing.TB, r *Root, c uint64) {
 	t.Helper()
-	if r.Count != c {
+	if r.count != c {
 		t.Fatal("count is wrong")
 	}
 }
@@ -307,8 +308,8 @@ func TestChaos(t *testing.T) {
 
 		fail := false
 		correctLen := uint64(len(testMap))
-		if correctLen != a.Count {
-			t.Errorf("bad length before flush, correct: %d, Count: %d, i: %d", correctLen, a.Count, i)
+		if correctLen != a.Len() {
+			t.Errorf("bad length before flush, correct: %d, Count: %d, i: %d", correctLen, a.Len(), i)
 			fail = true
 		}
 
@@ -317,8 +318,8 @@ func TestChaos(t *testing.T) {
 
 		a, err = LoadAMT(ctx, bs, c)
 		assert.NoError(t, err)
-		if correctLen != a.Count {
-			t.Errorf("bad length after flush, correct: %d, Count: %d, i: %d", correctLen, a.Count, i)
+		if correctLen != a.Len() {
+			t.Errorf("bad length after flush, correct: %d, Count: %d, i: %d", correctLen, a.Len(), i)
 			fail = true
 		}
 
@@ -401,7 +402,7 @@ func TestInsertABunchWithDelete(t *testing.T) {
 	}
 
 	t.Logf("originSN: %d, removeSN: %d; expected: %d, actual len(n2a): %d",
-		len(originSet), len(removeSet), len(originSet)-len(removeSet), n2a.Count)
+		len(originSet), len(removeSet), len(originSet)-len(removeSet), n2a.Len())
 	assertCount(t, n2a, uint64(len(originSet)-len(removeSet)))
 
 	for i := uint64(0); i < uint64(num); i++ {
@@ -455,23 +456,16 @@ func TestDelete(t *testing.T) {
 	assertGet(ctx, t, a, 3, "cat")
 
 	assertDelete(t, a, 0)
-	fmt.Printf("%b\n", a.Node.Bmap[0])
 	assertDelete(t, a, 2)
-	fmt.Printf("%b\n", a.Node.Bmap[0])
 	assertDelete(t, a, 3)
-	fmt.Printf("%b\n", a.Node.Bmap[0])
 
 	assertCount(t, a, 0)
 	fmt.Println("trying deeper operations now")
 
 	assertSet(t, a, 23, "dog")
-	fmt.Printf("%b\n", a.Node.Bmap[0])
 	assertSet(t, a, 24, "dog")
-	fmt.Printf("%b\n", a.Node.Bmap[0])
 
-	fmt.Println("FAILURE NEXT")
 	assertDelete(t, a, 23)
-	fmt.Printf("%b\n", a.Node.Bmap[0])
 
 	assertCount(t, a, 1)
 
@@ -543,15 +537,38 @@ func TestDeleteReduceHeight(t *testing.T) {
 func BenchmarkAMTInsertBulk(b *testing.B) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
-	a := NewAMT(bs)
 
-	for i := uint64(b.N); i > 0; i-- {
-		if err := a.Set(ctx, i, "some value"); err != nil {
+	for i := 0; i < b.N; i++ {
+		a := NewAMT(bs)
+
+		num := uint64(5000)
+
+		for i := uint64(0); i < num; i++ {
+			if err := a.Set(ctx, i, "foo foo bar"); err != nil {
+				b.Fatal(err)
+			}
+		}
+
+		for i := uint64(0); i < num; i++ {
+			assertGet(ctx, b, a, i, "foo foo bar")
+		}
+
+		c, err := a.Flush(ctx)
+		if err != nil {
 			b.Fatal(err)
 		}
-	}
 
-	assertCount(b, a, uint64(b.N))
+		na, err := LoadAMT(ctx, bs, c)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		for i := uint64(0); i < num; i++ {
+			assertGet(ctx, b, na, i, "foo foo bar")
+		}
+
+		assertCount(b, na, num)
+	}
 }
 
 func BenchmarkAMTLoadAndInsert(b *testing.B) {
@@ -699,8 +716,9 @@ func TestFirstSetIndex(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
 
-	vals := []uint64{0, 1, 5, width, width + 1, 276, 1234, 62881923}
-	for _, v := range vals {
+	vals := []uint64{0, 1, 5, internal.Width, internal.Width + 1, 276, 1234, 62881923}
+	for i, v := range vals {
+		t.Log(i, v)
 		a := NewAMT(bs)
 		if err := a.Set(ctx, v, fmt.Sprint(v)); err != nil {
 			t.Fatal(err)
@@ -765,17 +783,18 @@ func TestEmptyCIDStability(t *testing.T) {
 func TestBadBitfield(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
-	a := NewAMT(bs)
 
-	a.Node.Bmap[0] = 0xff
-	a.Height = 10
-	a.Count = 10
-	c, err := bs.Put(ctx, a)
+	subnode, err := bs.Put(ctx, new(internal.Node))
 	require.NoError(t, err)
 
-	a2, err := LoadAMT(ctx, bs, c)
+	var root internal.Root
+	root.Node.Bmap[0] = 0xff
+	root.Node.Links = append(root.Node.Links, subnode)
+	root.Height = 10
+	root.Count = 10
+	c, err := bs.Put(ctx, &root)
 	require.NoError(t, err)
-	var out string
-	err = a2.Get(ctx, 100, &out)
+
+	_, err = LoadAMT(ctx, bs, c)
 	require.Error(t, err)
 }
