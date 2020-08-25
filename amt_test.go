@@ -28,15 +28,17 @@ func init() {
 }
 
 type mockBlocks struct {
-	data map[cid.Cid]block.Block
+	data               map[cid.Cid]block.Block
+	getCount, putCount int
 }
 
 func newMockBlocks() *mockBlocks {
-	return &mockBlocks{make(map[cid.Cid]block.Block)}
+	return &mockBlocks{make(map[cid.Cid]block.Block), 0, 0}
 }
 
 func (mb *mockBlocks) Get(c cid.Cid) (block.Block, error) {
 	d, ok := mb.data[c]
+	mb.getCount++
 	if ok {
 		return d, nil
 	}
@@ -44,8 +46,14 @@ func (mb *mockBlocks) Get(c cid.Cid) (block.Block, error) {
 }
 
 func (mb *mockBlocks) Put(b block.Block) error {
+	mb.putCount++
 	mb.data[b.Cid()] = b
 	return nil
+}
+
+func (mb *mockBlocks) report(b *testing.B) {
+	b.ReportMetric(float64(mb.getCount)/float64(b.N), "gets/op")
+	b.ReportMetric(float64(mb.putCount)/float64(b.N), "puts/op")
 }
 
 func TestBasicSetGet(t *testing.T) {
@@ -578,7 +586,10 @@ func TestDeleteReduceHeight(t *testing.T) {
 }
 
 func BenchmarkAMTInsertBulk(b *testing.B) {
-	bs := cbor.NewCborStore(newMockBlocks())
+	mock := newMockBlocks()
+	defer mock.report(b)
+
+	bs := cbor.NewCborStore(mock)
 	ctx := context.Background()
 
 	for i := 0; i < b.N; i++ {
@@ -615,7 +626,10 @@ func BenchmarkAMTInsertBulk(b *testing.B) {
 }
 
 func BenchmarkAMTLoadAndInsert(b *testing.B) {
-	bs := cbor.NewCborStore(newMockBlocks())
+	mock := newMockBlocks()
+	defer mock.report(b)
+
+	bs := cbor.NewCborStore(mock)
 	ctx := context.Background()
 	a := NewAMT(bs)
 
