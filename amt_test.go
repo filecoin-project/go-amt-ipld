@@ -73,6 +73,23 @@ func TestBasicSetGet(t *testing.T) {
 
 }
 
+func TestRoundTrip(t *testing.T) {
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
+	a := NewAMT(bs)
+	emptyCid, err := a.Flush(ctx)
+	require.NoError(t, err)
+
+	k := uint64(100000)
+	assertSet(t, a, k, "foo")
+	assertDelete(t, a, k)
+
+	c, err := a.Flush(ctx)
+	require.NoError(t, err)
+
+	require.Equal(t, emptyCid, c)
+}
+
 func TestOutOfRange(t *testing.T) {
 	ctx := context.Background()
 	bs := cbor.NewCborStore(newMockBlocks())

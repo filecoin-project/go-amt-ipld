@@ -83,13 +83,17 @@ func newNode(nd internal.Node, allowEmpty, expectLeaf bool) (*node, error) {
 }
 
 func (nd *node) collapse(ctx context.Context, bs cbor.IpldStore, height int) (int, error) {
-	if nd.links[0] == nil {
-		return height, nil
-	}
+	// If we have any links going "to the right", we can't collapse any
+	// more.
 	for _, l := range nd.links[1:] {
 		if l != nil {
 			return height, nil
 		}
+	}
+
+	// If we have _no_ links, we've collapsed everything.
+	if nd.links[0] == nil {
+		return 0, nil
 	}
 
 	// only one child, collapse it.
