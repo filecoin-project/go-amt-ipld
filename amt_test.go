@@ -1,6 +1,7 @@
 package amt
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math/rand"
@@ -15,6 +16,16 @@ import (
 	"github.com/stretchr/testify/require"
 	cbg "github.com/whyrusleeping/cbor-gen"
 )
+
+var numbers []cbg.CBORMarshaler
+
+func init() {
+	numbers = make([]cbg.CBORMarshaler, 10)
+	for i := range numbers {
+		val := cbg.CborInt(i)
+		numbers[i] = &val
+	}
+}
 
 type mockBlocks struct {
 	data map[cid.Cid]block.Block
@@ -68,23 +79,38 @@ func TestOutOfRange(t *testing.T) {
 
 	a := NewAMT(bs)
 
-	err := a.Set(ctx, 1<<63+4, "what is up")
+	err := a.Set(ctx, 1<<63+4, "what is up 1")
 	if err == nil {
 		t.Fatal("should have failed to set value out of range")
 	}
 
-	err = a.Set(ctx, MaxIndex+1, "what is up")
+	err = a.Set(ctx, MaxIndex+1, "what is up 2")
 	if err == nil {
 		t.Fatal("should have failed to set value out of range")
 	}
 
-	err = a.Set(ctx, MaxIndex, "what is up")
+	err = a.Set(ctx, MaxIndex, "what is up 3")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if a.height != internal.MaxHeight {
 		t.Fatal("expected to be at the maximum height")
 	}
+
+	var out string
+	require.NoError(t, a.Get(ctx, MaxIndex, &out))
+	require.Equal(t, "what is up 3", out)
+
+	err = a.Get(ctx, MaxIndex+1, &out)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "out of range")
+
+	err = a.Delete(ctx, MaxIndex)
+	require.NoError(t, err)
+
+	err = a.Delete(ctx, MaxIndex+1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "out of range")
 }
 
 func assertDelete(t *testing.T, r *Root, i uint64) {
@@ -751,6 +777,10 @@ func TestFirstSetIndex(t *testing.T) {
 		if fsi != v {
 			t.Fatal("got wrong index out after serialization")
 		}
+		err = after.Delete(ctx, v)
+		require.NoError(t, err)
+		fsi, err = after.FirstSetIndex(ctx)
+		require.Error(t, err)
 	}
 }
 
@@ -797,4 +827,49 @@ func TestBadBitfield(t *testing.T) {
 
 	_, err = LoadAMT(ctx, bs, c)
 	require.Error(t, err)
+}
+
+func TestFromArray(t *testing.T) {
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
+
+	c, err := FromArray(ctx, bs, numbers)
+	require.NoError(t, err)
+	a, err := LoadAMT(ctx, bs, c)
+	require.NoError(t, err)
+	assertEquals(ctx, t, a, numbers)
+	assertCount(t, a, 10)
+}
+
+func TestBatch(t *testing.T) {
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
+	a := NewAMT(bs)
+
+	require.NoError(t, a.BatchSet(ctx, numbers))
+	assertEquals(ctx, t, a, numbers)
+
+	c, err := a.Flush(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clean, err := LoadAMT(ctx, bs, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertEquals(ctx, t, clean, numbers)
+	require.NoError(t, a.BatchDelete(ctx, []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}))
+	assertCount(t, a, 0)
+}
+
+func assertEquals(ctx context.Context, t testing.TB, a *Root, values []cbg.CBORMarshaler) {
+	require.NoError(t, a.ForEach(ctx, func(i uint64, val *cbg.Deferred) error {
+		var buf bytes.Buffer
+		require.NoError(t, values[i].MarshalCBOR(&buf))
+		require.Equal(t, buf.Bytes(), val.Raw)
+		return nil
+	}))
+	assertCount(t, a, uint64(len(values)))
 }
