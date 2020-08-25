@@ -311,6 +311,7 @@ func (n *node) flush(ctx context.Context, bs cbor.IpldStore, height int) (*inter
 			}
 
 			ln.cid = cid
+			ln.dirty = false
 		}
 		nd.Links = append(nd.Links, ln.cid)
 		nd.Bmap[i/8] |= 1 << (uint(i) % 8)
