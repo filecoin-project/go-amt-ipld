@@ -238,6 +238,41 @@ func (r *Root) Len() uint64 {
 	return r.count
 }
 
+func (r *Root) Clone() *Root {
+	return &Root{
+		height: r.height,
+		count:  r.count,
+		node:   r.node.clone(),
+		store:  r.store,
+	}
+}
+
+func (n *node) clone() *node {
+	if n == nil {
+		return nil
+	}
+	clone := new(node)
+	for i, v := range n.values {
+		clone.values[i] = v // these are immutable anyways.
+	}
+
+	for i, l := range n.links {
+		clone.links[i] = l.clone()
+	}
+	return clone
+}
+
+func (l *link) clone() *link {
+	if l == nil {
+		return nil
+	}
+	return &link{
+		cid:    l.cid,
+		cached: l.cached.clone(),
+		dirty:  l.dirty,
+	}
+}
+
 type ErrNotFound struct {
 	Index uint64
 }
