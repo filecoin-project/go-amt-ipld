@@ -761,3 +761,41 @@ func TestEmptyCIDStability(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, c1, c3)
 }
+
+func TestCidStability(t *testing.T) {
+	const count = 500
+
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
+	a := NewAMT(bs)
+
+	cids := make([]cid.Cid, count)
+
+	// Add, flushing each time.
+	for i := 0; i < count; i++ {
+		// Flush just in case.
+		c, err := a.Flush(ctx)
+		require.NoError(t, err)
+		cids[i] = c
+		assert.NoError(t, a.Set(ctx, uint64(i), fmt.Sprintf("%d", i)))
+	}
+
+	// now go backwards
+	for i := count - 1; i >= 0; i-- {
+		assert.NoError(t, a.Delete(ctx, uint64(i)))
+		c, err := a.Flush(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, cids[i], c)
+	}
+
+	// now go backwards and start over.
+	a2, err := LoadAMT(ctx, bs, cids[len(cids)-1])
+	require.NoError(t, err)
+
+	for i := count - 2; i >= 0; i-- {
+		assert.NoError(t, a2.Delete(ctx, uint64(i)))
+		c, err := a2.Flush(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, cids[i], c)
+	}
+}
