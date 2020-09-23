@@ -15,29 +15,46 @@ import (
 	cbg "github.com/whyrusleeping/cbor-gen"
 )
 
+type bsStats struct {
+	// Num reads
+	r int
+	// Num writes
+	w int
+	// Bytes read
+	br int
+	// Bytes written
+	bw int
+}
+
 type mockBlocks struct {
-	data map[cid.Cid]block.Block
+	data  map[cid.Cid]block.Block
+	stats bsStats
 }
 
 func newMockBlocks() *mockBlocks {
-	return &mockBlocks{make(map[cid.Cid]block.Block)}
+	return &mockBlocks{make(map[cid.Cid]block.Block), bsStats{}}
 }
 
 func (mb *mockBlocks) Get(c cid.Cid) (block.Block, error) {
+	mb.stats.r++
 	d, ok := mb.data[c]
 	if ok {
+		mb.stats.br += len(d.RawData())
 		return d, nil
 	}
 	return nil, fmt.Errorf("Not Found")
 }
 
 func (mb *mockBlocks) Put(b block.Block) error {
+	mb.stats.w++
+	mb.stats.bw += len(b.RawData())
 	mb.data[b.Cid()] = b
 	return nil
 }
 
 func TestBasicSetGet(t *testing.T) {
-	bs := cbor.NewCborStore(newMockBlocks())
+	trackingBs := newMockBlocks()
+	bs := cbor.NewCborStore(trackingBs)
 	ctx := context.Background()
 	a := NewAMT(bs)
 
@@ -59,11 +76,14 @@ func TestBasicSetGet(t *testing.T) {
 
 	assertCount(t, clean, 1)
 
+	assert.Equal(t, "bafy2bzacea4z4wxtdoo6ikgqkoe4gm364xhdtreycvfy5txvprpbtunx5jnwy", c.String())
+	assert.Equal(t, bsStats{r: 1, w: 1, br: 12, bw: 12}, trackingBs.stats)
 }
 
 func TestOutOfRange(t *testing.T) {
 	ctx := context.Background()
-	bs := cbor.NewCborStore(newMockBlocks())
+	trackingBs := newMockBlocks()
+	bs := cbor.NewCborStore(trackingBs)
 
 	a := NewAMT(bs)
 
@@ -84,6 +104,14 @@ func TestOutOfRange(t *testing.T) {
 	if a.Height != maxHeight {
 		t.Fatal("expected to be at the maximum height")
 	}
+
+	c, err := a.Flush(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assert.Equal(t, "bafy2bzacedozbiofn5fnrtfzy3tk5k7inyp5ncusdtb6xyl5z4rstdgqbad7g", c.String())
+	assert.Equal(t, bsStats{r: 0, w: 21, br: 0, bw: 979}, trackingBs.stats)
 }
 
 func assertDelete(t *testing.T, r *Root, i uint64) {
@@ -142,7 +170,8 @@ func assertGet(ctx context.Context, t testing.TB, r *Root, i uint64, val string)
 }
 
 func TestExpand(t *testing.T) {
-	bs := cbor.NewCborStore(newMockBlocks())
+	trackingBs := newMockBlocks()
+	bs := cbor.NewCborStore(trackingBs)
 	ctx := context.Background()
 	a := NewAMT(bs)
 
@@ -175,10 +204,14 @@ func TestExpand(t *testing.T) {
 	assertGet(ctx, t, na, 2, "foo")
 	assertGet(ctx, t, na, 11, "bar")
 	assertGet(ctx, t, na, 79, "baz")
+
+	assert.Equal(t, "bafy2bzaced25ah2r4gcerysjyrjqpqw72jvdy5ziwxk53ldxibktwmgkfgc22", c.String())
+	assert.Equal(t, bsStats{r: 9, w: 9, br: 369, bw: 369}, trackingBs.stats)
 }
 
 func TestInsertABunch(t *testing.T) {
-	bs := cbor.NewCborStore(newMockBlocks())
+	trackingBs := newMockBlocks()
+	bs := cbor.NewCborStore(trackingBs)
 	ctx := context.Background()
 	a := NewAMT(bs)
 
@@ -209,6 +242,9 @@ func TestInsertABunch(t *testing.T) {
 	}
 
 	assertCount(t, na, num)
+
+	assert.Equal(t, "bafy2bzacedjhcq7542wu7ike4i4srgq7hwxxc5pmw5sub4secqk33mugl4zda", c.String())
+	assert.Equal(t, bsStats{r: 1302, w: 1302, br: 171567, bw: 171567}, trackingBs.stats)
 }
 
 func TestForEachWithoutFlush(t *testing.T) {
@@ -412,7 +448,8 @@ func TestInsertABunchWithDelete(t *testing.T) {
 }
 
 func TestDeleteFirstEntry(t *testing.T) {
-	bs := cbor.NewCborStore(newMockBlocks())
+	trackingBs := newMockBlocks()
+	bs := cbor.NewCborStore(trackingBs)
 	ctx := context.Background()
 	a := NewAMT(bs)
 
@@ -432,10 +469,13 @@ func TestDeleteFirstEntry(t *testing.T) {
 	}
 
 	assertCount(t, na, 1)
+	assert.Equal(t, "bafy2bzacec4rpjwfkzp4n2wj233774cnhk5o2d7pub2gso2g3isdfxnxuhbr2", c.String())
+	assert.Equal(t, bsStats{r: 2, w: 2, br: 21, bw: 21}, trackingBs.stats)
 }
 
 func TestDelete(t *testing.T) {
-	bs := cbor.NewCborStore(newMockBlocks())
+	trackingBs := newMockBlocks()
+	bs := cbor.NewCborStore(trackingBs)
 	ctx := context.Background()
 	a := NewAMT(bs)
 
@@ -501,10 +541,13 @@ func TestDelete(t *testing.T) {
 		fmt.Printf("%#v\n", a2)
 		t.Fatal("unexpected cid", c, a2c)
 	}
+	assert.Equal(t, "bafy2bzacedtq64mekzyjshwa3kxyt4kt5volln6acoavl4p7dexzczefwj7uw", c.String())
+	assert.Equal(t, bsStats{r: 1, w: 4, br: 51, bw: 120}, trackingBs.stats)
 }
 
 func TestDeleteReduceHeight(t *testing.T) {
-	bs := cbor.NewCborStore(newMockBlocks())
+	trackingBs := newMockBlocks()
+	bs := cbor.NewCborStore(trackingBs)
 	ctx := context.Background()
 	a := NewAMT(bs)
 
@@ -538,6 +581,8 @@ func TestDeleteReduceHeight(t *testing.T) {
 	if c1 != c3 {
 		t.Fatal("structures did not match after insert/delete")
 	}
+	assert.Equal(t, "bafy2bzaceccdkhc6fuhybskfl4hoydekua2su2vz45molwmy3ah36pnsmntvc", c1.String())
+	assert.Equal(t, bsStats{r: 3, w: 5, br: 116, bw: 144}, trackingBs.stats)
 }
 
 func BenchmarkAMTInsertBulk(b *testing.B) {
@@ -581,15 +626,14 @@ func BenchmarkAMTLoadAndInsert(b *testing.B) {
 }
 
 func TestForEach(t *testing.T) {
-	bs := cbor.NewCborStore(newMockBlocks())
+	trackingBs := newMockBlocks()
+	bs := cbor.NewCborStore(trackingBs)
 	ctx := context.Background()
 	a := NewAMT(bs)
 
-	r := rand.New(rand.NewSource(101))
-
 	var indexes []uint64
 	for i := 0; i < 10000; i++ {
-		if r.Intn(2) == 0 {
+		if (i*7+1)%3 == 0 {
 			indexes = append(indexes, uint64(i))
 		}
 	}
@@ -632,6 +676,8 @@ func TestForEach(t *testing.T) {
 	if x != len(indexes) {
 		t.Fatal("didnt see enough values")
 	}
+	assert.Equal(t, "bafy2bzaceccb5cgeysdu6ferucawc6twfedv5gc3iqgh2ko7o7e25r5ucpf4u", c.String())
+	assert.Equal(t, bsStats{r: 2016, w: 2016, br: 124875, bw: 124875}, trackingBs.stats)
 }
 
 func TestForEachAt(t *testing.T) {
