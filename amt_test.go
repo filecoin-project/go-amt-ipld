@@ -837,10 +837,19 @@ func TestRoundTrip(t *testing.T) {
 	assertSet(t, newAmt, 9, "foo")
 	assertGet(ctx, t, newAmt, 9, "foo")
 	assert.Equal(t, uint64(5), newAmt.Height)
-	assertSet(t, newAmt, 400, "bar")
-	assertGet(ctx, t, newAmt, 400, "bar")
+	assertSet(t, newAmt, 66, "bar")
+	assertGet(ctx, t, newAmt, 66, "bar")
 	assert.Equal(t, uint64(5), newAmt.Height)
+	assertSet(t, newAmt, 515, "baz")
+	assertGet(ctx, t, newAmt, 515, "baz")
+	assert.Equal(t, uint64(5), newAmt.Height)
+
+	assertDelete(t, newAmt, 9)
+	assert.Equal(t, uint64(3), newAmt.Height)
+	assertDelete(t, newAmt, 515)
+	assert.Equal(t, uint64(2), newAmt.Height)
+
 	c, err = newAmt.Flush(ctx)
-	assert.Equal(t, "bafy2bzaceakfpvbxzuyfgcwpqhu6evurdzcch7rsoiiwjpks3au7mkkf6ju6u", c.String())
-	assert.Equal(t, bsStats{r: 1, w: 10, br: 8, bw: 368}, trackingBs.stats)
+	assert.Equal(t, "bafy2bzaceblz37c42237c42h3y7vwzcqdjolm6fmmturwcifbd7zx2afvazke", c.String())
+	assert.Equal(t, bsStats{r: 1, w: 5, br: 8, bw: 124}, trackingBs.stats)
 }
