@@ -807,3 +807,40 @@ func TestEmptyCIDStability(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, c1, c3)
 }
+
+func TestRoundTrip(t *testing.T) {
+	trackingBs := newMockBlocks()
+	bs := cbor.NewCborStore(trackingBs)
+	ctx := context.Background()
+	a := NewAMT(bs)
+	emptyCid, err := a.Flush(ctx)
+	require.NoError(t, err)
+
+	k := uint64(100000)
+	assertSet(t, a, k, "foo")
+	assertDelete(t, a, k)
+
+	c, err := a.Flush(ctx)
+	require.NoError(t, err)
+
+	// TODO fix this, this is testing locked in bug functionality
+	// require.Equal(t, emptyCid, c)
+	assert.Equal(t, "bafy2bzacedswlcz5ddgqnyo3sak3jmhmkxashisnlpq6ujgyhe4mlobzpnhs6", emptyCid.String())
+	assert.Equal(t, "bafy2bzacec3ltjhtro3i4usbev24phgv6hb4fbfdaa2lxid4uod3zw4v3uce6", c.String())
+	assert.Equal(t, bsStats{r: 0, w: 2, br: 0, bw: 16}, trackingBs.stats)
+
+	// * This is just testing the bug functionality, remove if bug removed
+	newAmt, err := LoadAMT(ctx, bs, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSet(t, newAmt, 9, "foo")
+	assertGet(ctx, t, newAmt, 9, "foo")
+	assert.Equal(t, uint64(5), newAmt.Height)
+	assertSet(t, newAmt, 400, "bar")
+	assertGet(ctx, t, newAmt, 400, "bar")
+	assert.Equal(t, uint64(5), newAmt.Height)
+	c, err = newAmt.Flush(ctx)
+	assert.Equal(t, "bafy2bzaceakfpvbxzuyfgcwpqhu6evurdzcch7rsoiiwjpks3au7mkkf6ju6u", c.String())
+	assert.Equal(t, bsStats{r: 1, w: 10, br: 8, bw: 368}, trackingBs.stats)
+}
