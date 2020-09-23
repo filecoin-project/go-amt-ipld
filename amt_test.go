@@ -633,7 +633,7 @@ func TestForEach(t *testing.T) {
 
 	var indexes []uint64
 	for i := 0; i < 10000; i++ {
-		if (i*7+1)%3 == 0 {
+		if (i+1)%3 == 0 {
 			indexes = append(indexes, uint64(i))
 		}
 	}
