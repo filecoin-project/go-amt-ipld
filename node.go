@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/filecoin-project/go-amt-ipld/v2/internal"
+	"github.com/filecoin-project/go-amt-ipld/v3/internal"
 	"github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
 	cbg "github.com/whyrusleeping/cbor-gen"

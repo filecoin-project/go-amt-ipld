@@ -11,7 +11,7 @@ import (
 	logging "github.com/ipfs/go-log"
 	cbg "github.com/whyrusleeping/cbor-gen"
 
-	"github.com/filecoin-project/go-amt-ipld/v2/internal"
+	"github.com/filecoin-project/go-amt-ipld/v3/internal"
 )
 
 var log = logging.Logger("amt")

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/filecoin-project/go-amt-ipld/v2/internal"
+	"github.com/filecoin-project/go-amt-ipld/v3/internal"
 	block "github.com/ipfs/go-block-format"
 	cid "github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
