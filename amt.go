@@ -198,6 +198,7 @@ func (r *Root) Delete(ctx context.Context, i uint64) error {
 	}
 	r.Count--
 
+	// While we only have elements in left branch, collapse.
 	for r.Node.Bmap[0] == 1 && r.Height > 0 {
 		sub, err := r.Node.loadNode(ctx, r.store, 0, false)
 		if err != nil {
@@ -206,6 +207,11 @@ func (r *Root) Delete(ctx context.Context, i uint64) error {
 
 		r.Node = *sub
 		r.Height--
+	}
+	// If we have no elements, reset everything.
+	if r.Node.Bmap[0] == 0 {
+		r.Height = 0
+		r.Node = Node{} // to be safe.
 	}
 
 	return nil

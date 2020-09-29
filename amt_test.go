@@ -761,3 +761,20 @@ func TestEmptyCIDStability(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, c1, c3)
 }
+
+func TestRoundTrip(t *testing.T) {
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
+	a := NewAMT(bs)
+	emptyCid, err := a.Flush(ctx)
+	require.NoError(t, err)
+
+	k := uint64(100000)
+	assertSet(t, a, k, "foo")
+	assertDelete(t, a, k)
+
+	c, err := a.Flush(ctx)
+	require.NoError(t, err)
+
+	require.Equal(t, emptyCid, c)
+}
