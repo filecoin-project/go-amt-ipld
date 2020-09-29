@@ -3,7 +3,7 @@ package main
 import (
 	cbg "github.com/whyrusleeping/cbor-gen"
 
-	"github.com/filecoin-project/go-amt-ipld/v2"
+	"github.com/filecoin-project/go-amt-ipld/v3"
 )
 
 func main() {
