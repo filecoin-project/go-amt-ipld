@@ -761,3 +761,21 @@ func TestEmptyCIDStability(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, c1, c3)
 }
+
+func TestBadBitfield(t *testing.T) {
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
+	a := NewAMT(bs)
+
+	a.Node.Bmap[0] = 0xff
+	a.Height = 10
+	a.Count = 10
+	c, err := bs.Put(ctx, a)
+	require.NoError(t, err)
+
+	a2, err := LoadAMT(ctx, bs, c)
+	require.NoError(t, err)
+	var out string
+	err = a2.Get(ctx, 100, &out)
+	require.Error(t, err)
+}
