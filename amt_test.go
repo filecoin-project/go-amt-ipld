@@ -76,8 +76,13 @@ func TestBasicSetGet(t *testing.T) {
 
 	assertCount(t, clean, 1)
 
+	c, err = a.Flush(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	assert.Equal(t, "bafy2bzacea4z4wxtdoo6ikgqkoe4gm364xhdtreycvfy5txvprpbtunx5jnwy", c.String())
-	assert.Equal(t, bsStats{r: 1, w: 1, br: 12, bw: 12}, trackingBs.stats)
+	assert.Equal(t, bsStats{r: 1, w: 2, br: 12, bw: 24}, trackingBs.stats)
 }
 
 func TestOutOfRange(t *testing.T) {
@@ -245,6 +250,44 @@ func TestInsertABunch(t *testing.T) {
 
 	assert.Equal(t, "bafy2bzacedjhcq7542wu7ike4i4srgq7hwxxc5pmw5sub4secqk33mugl4zda", c.String())
 	assert.Equal(t, bsStats{r: 1302, w: 1302, br: 171567, bw: 171567}, trackingBs.stats)
+}
+
+func TestFlushRead(t *testing.T) {
+	trackingBs := newMockBlocks()
+	bs := cbor.NewCborStore(trackingBs)
+	ctx := context.Background()
+	a := NewAMT(bs)
+
+	num := uint64(100)
+
+	for i := uint64(0); i < num; i++ {
+		if err := a.Set(ctx, i, "foo foo bar"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for i := uint64(0); i < num; i++ {
+		assertGet(ctx, t, a, i, "foo foo bar")
+	}
+	assert.Equal(t, bsStats{r: 9, w: 9, br: 1157, bw: 1157}, trackingBs.stats)
+
+	_, err := a.Flush(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assert.Equal(t, bsStats{r: 9, w: 25, br: 1157, bw: 3086}, trackingBs.stats)
+	_, err = a.Flush(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, bsStats{r: 9, w: 25, br: 1157, bw: 3086}, trackingBs.stats)
+
+	for i := uint64(0); i < num; i++ {
+		assertGet(ctx, t, a, i, "foo foo bar")
+	}
+
+	assert.Equal(t, bsStats{r: 9, w: 25, br: 1157, bw: 3086}, trackingBs.stats)
 }
 
 func TestForEachWithoutFlush(t *testing.T) {
