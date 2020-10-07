@@ -276,13 +276,6 @@ func TestFlushRead(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assert.Equal(t, bsStats{r: 9, w: 25, br: 1157, bw: 3086}, trackingBs.stats)
-	_, err = a.Flush(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assert.Equal(t, bsStats{r: 9, w: 25, br: 1157, bw: 3086}, trackingBs.stats)
-
 	for i := uint64(0); i < num; i++ {
 		assertGet(ctx, t, a, i, "foo foo bar")
 	}
