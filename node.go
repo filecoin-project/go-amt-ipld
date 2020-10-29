@@ -38,7 +38,7 @@ func newNode(nd internal.Node, allowEmpty, expectLeaf bool) (*node, error) {
 		if !expectLeaf {
 			return nil, errLeafUnexpected
 		}
-		for x := byte(0); x < internal.Width; x++ {
+		for x := uint(0); x < internal.Width; x++ {
 			if nd.Bmap[x/8]&(1<<(x%8)) > 0 {
 				if i >= len(nd.Values) {
 					return nil, fmt.Errorf("expected at least %d values, found %d", i+1, len(nd.Values))
@@ -55,7 +55,7 @@ func newNode(nd internal.Node, allowEmpty, expectLeaf bool) (*node, error) {
 			return nil, errLeafExpected
 		}
 
-		for x := byte(0); x < internal.Width; x++ {
+		for x := uint(0); x < internal.Width; x++ {
 			if nd.Bmap[x/8]&(1<<(x%8)) > 0 {
 				if i >= len(nd.Links) {
 					return nil, fmt.Errorf("expected at least %d links, found %d", i+1, len(nd.Links))
@@ -305,6 +305,9 @@ func (n *node) flush(ctx context.Context, bs cbor.IpldStore, height int) (*inter
 			continue
 		}
 		if ln.dirty {
+			if ln.cached == nil {
+				return nil, fmt.Errorf("expected dirty node to be cached")
+			}
 			subn, err := ln.cached.flush(ctx, bs, height-1)
 			if err != nil {
 				return nil, err
