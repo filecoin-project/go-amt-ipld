@@ -1,12 +1,14 @@
 package amt
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math/rand"
 	"testing"
 	"time"
 
+	"github.com/filecoin-project/go-amt-ipld/v3/internal"
 	block "github.com/ipfs/go-block-format"
 	cid "github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
@@ -15,16 +17,28 @@ import (
 	cbg "github.com/whyrusleeping/cbor-gen"
 )
 
+var numbers []cbg.CBORMarshaler
+
+func init() {
+	numbers = make([]cbg.CBORMarshaler, 10)
+	for i := range numbers {
+		val := cbg.CborInt(i)
+		numbers[i] = &val
+	}
+}
+
 type mockBlocks struct {
-	data map[cid.Cid]block.Block
+	data               map[cid.Cid]block.Block
+	getCount, putCount int
 }
 
 func newMockBlocks() *mockBlocks {
-	return &mockBlocks{make(map[cid.Cid]block.Block)}
+	return &mockBlocks{make(map[cid.Cid]block.Block), 0, 0}
 }
 
 func (mb *mockBlocks) Get(c cid.Cid) (block.Block, error) {
 	d, ok := mb.data[c]
+	mb.getCount++
 	if ok {
 		return d, nil
 	}
@@ -32,8 +46,14 @@ func (mb *mockBlocks) Get(c cid.Cid) (block.Block, error) {
 }
 
 func (mb *mockBlocks) Put(b block.Block) error {
+	mb.putCount++
 	mb.data[b.Cid()] = b
 	return nil
+}
+
+func (mb *mockBlocks) report(b *testing.B) {
+	b.ReportMetric(float64(mb.getCount)/float64(b.N), "gets/op")
+	b.ReportMetric(float64(mb.putCount)/float64(b.N), "puts/op")
 }
 
 func TestBasicSetGet(t *testing.T) {
@@ -61,29 +81,61 @@ func TestBasicSetGet(t *testing.T) {
 
 }
 
+func TestRoundTrip(t *testing.T) {
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
+	a := NewAMT(bs)
+	emptyCid, err := a.Flush(ctx)
+	require.NoError(t, err)
+
+	k := uint64(100000)
+	assertSet(t, a, k, "foo")
+	assertDelete(t, a, k)
+
+	c, err := a.Flush(ctx)
+	require.NoError(t, err)
+
+	require.Equal(t, emptyCid, c)
+}
+
 func TestOutOfRange(t *testing.T) {
 	ctx := context.Background()
 	bs := cbor.NewCborStore(newMockBlocks())
 
 	a := NewAMT(bs)
 
-	err := a.Set(ctx, 1<<63+4, "what is up")
+	err := a.Set(ctx, 1<<63+4, "what is up 1")
 	if err == nil {
 		t.Fatal("should have failed to set value out of range")
 	}
 
-	err = a.Set(ctx, MaxIndex+1, "what is up")
+	err = a.Set(ctx, MaxIndex+1, "what is up 2")
 	if err == nil {
 		t.Fatal("should have failed to set value out of range")
 	}
 
-	err = a.Set(ctx, MaxIndex, "what is up")
+	err = a.Set(ctx, MaxIndex, "what is up 3")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Height != maxHeight {
+	if a.height != internal.MaxHeight {
 		t.Fatal("expected to be at the maximum height")
 	}
+
+	var out string
+	require.NoError(t, a.Get(ctx, MaxIndex, &out))
+	require.Equal(t, "what is up 3", out)
+
+	err = a.Get(ctx, MaxIndex+1, &out)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "out of range")
+
+	err = a.Delete(ctx, MaxIndex)
+	require.NoError(t, err)
+
+	err = a.Delete(ctx, MaxIndex+1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "out of range")
 }
 
 func assertDelete(t *testing.T, r *Root, i uint64) {
@@ -122,7 +174,7 @@ func assertSet(t *testing.T, r *Root, i uint64, val string) {
 
 func assertCount(t testing.TB, r *Root, c uint64) {
 	t.Helper()
-	if r.Count != c {
+	if r.count != c {
 		t.Fatal("count is wrong")
 	}
 }
@@ -307,8 +359,8 @@ func TestChaos(t *testing.T) {
 
 		fail := false
 		correctLen := uint64(len(testMap))
-		if correctLen != a.Count {
-			t.Errorf("bad length before flush, correct: %d, Count: %d, i: %d", correctLen, a.Count, i)
+		if correctLen != a.Len() {
+			t.Errorf("bad length before flush, correct: %d, Count: %d, i: %d", correctLen, a.Len(), i)
 			fail = true
 		}
 
@@ -317,8 +369,8 @@ func TestChaos(t *testing.T) {
 
 		a, err = LoadAMT(ctx, bs, c)
 		assert.NoError(t, err)
-		if correctLen != a.Count {
-			t.Errorf("bad length after flush, correct: %d, Count: %d, i: %d", correctLen, a.Count, i)
+		if correctLen != a.Len() {
+			t.Errorf("bad length after flush, correct: %d, Count: %d, i: %d", correctLen, a.Len(), i)
 			fail = true
 		}
 
@@ -401,7 +453,7 @@ func TestInsertABunchWithDelete(t *testing.T) {
 	}
 
 	t.Logf("originSN: %d, removeSN: %d; expected: %d, actual len(n2a): %d",
-		len(originSet), len(removeSet), len(originSet)-len(removeSet), n2a.Count)
+		len(originSet), len(removeSet), len(originSet)-len(removeSet), n2a.Len())
 	assertCount(t, n2a, uint64(len(originSet)-len(removeSet)))
 
 	for i := uint64(0); i < uint64(num); i++ {
@@ -455,23 +507,16 @@ func TestDelete(t *testing.T) {
 	assertGet(ctx, t, a, 3, "cat")
 
 	assertDelete(t, a, 0)
-	fmt.Printf("%b\n", a.Node.Bmap[0])
 	assertDelete(t, a, 2)
-	fmt.Printf("%b\n", a.Node.Bmap[0])
 	assertDelete(t, a, 3)
-	fmt.Printf("%b\n", a.Node.Bmap[0])
 
 	assertCount(t, a, 0)
 	fmt.Println("trying deeper operations now")
 
 	assertSet(t, a, 23, "dog")
-	fmt.Printf("%b\n", a.Node.Bmap[0])
 	assertSet(t, a, 24, "dog")
-	fmt.Printf("%b\n", a.Node.Bmap[0])
 
-	fmt.Println("FAILURE NEXT")
 	assertDelete(t, a, 23)
-	fmt.Printf("%b\n", a.Node.Bmap[0])
 
 	assertCount(t, a, 1)
 
@@ -541,21 +586,50 @@ func TestDeleteReduceHeight(t *testing.T) {
 }
 
 func BenchmarkAMTInsertBulk(b *testing.B) {
-	bs := cbor.NewCborStore(newMockBlocks())
-	ctx := context.Background()
-	a := NewAMT(bs)
+	mock := newMockBlocks()
+	defer mock.report(b)
 
-	for i := uint64(b.N); i > 0; i-- {
-		if err := a.Set(ctx, i, "some value"); err != nil {
+	bs := cbor.NewCborStore(mock)
+	ctx := context.Background()
+
+	for i := 0; i < b.N; i++ {
+		a := NewAMT(bs)
+
+		num := uint64(5000)
+
+		for i := uint64(0); i < num; i++ {
+			if err := a.Set(ctx, i, "foo foo bar"); err != nil {
+				b.Fatal(err)
+			}
+		}
+
+		for i := uint64(0); i < num; i++ {
+			assertGet(ctx, b, a, i, "foo foo bar")
+		}
+
+		c, err := a.Flush(ctx)
+		if err != nil {
 			b.Fatal(err)
 		}
-	}
 
-	assertCount(b, a, uint64(b.N))
+		na, err := LoadAMT(ctx, bs, c)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		for i := uint64(0); i < num; i++ {
+			assertGet(ctx, b, na, i, "foo foo bar")
+		}
+
+		assertCount(b, na, num)
+	}
 }
 
 func BenchmarkAMTLoadAndInsert(b *testing.B) {
-	bs := cbor.NewCborStore(newMockBlocks())
+	mock := newMockBlocks()
+	defer mock.report(b)
+
+	bs := cbor.NewCborStore(mock)
 	ctx := context.Background()
 	a := NewAMT(bs)
 
@@ -699,8 +773,9 @@ func TestFirstSetIndex(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
 
-	vals := []uint64{0, 1, 5, width, width + 1, 276, 1234, 62881923}
-	for _, v := range vals {
+	vals := []uint64{0, 1, 5, internal.Width, internal.Width + 1, 276, 1234, 62881923}
+	for i, v := range vals {
+		t.Log(i, v)
 		a := NewAMT(bs)
 		if err := a.Set(ctx, v, fmt.Sprint(v)); err != nil {
 			t.Fatal(err)
@@ -733,6 +808,10 @@ func TestFirstSetIndex(t *testing.T) {
 		if fsi != v {
 			t.Fatal("got wrong index out after serialization")
 		}
+		err = after.Delete(ctx, v)
+		require.NoError(t, err)
+		fsi, err = after.FirstSetIndex(ctx)
+		require.Error(t, err)
 	}
 }
 
@@ -765,17 +844,63 @@ func TestEmptyCIDStability(t *testing.T) {
 func TestBadBitfield(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
+
+	subnode, err := bs.Put(ctx, new(internal.Node))
+	require.NoError(t, err)
+
+	var root internal.Root
+	root.Node.Bmap[0] = 0xff
+	root.Node.Links = append(root.Node.Links, subnode)
+	root.Height = 10
+	root.Count = 10
+	c, err := bs.Put(ctx, &root)
+	require.NoError(t, err)
+
+	_, err = LoadAMT(ctx, bs, c)
+	require.Error(t, err)
+}
+
+func TestFromArray(t *testing.T) {
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
+
+	c, err := FromArray(ctx, bs, numbers)
+	require.NoError(t, err)
+	a, err := LoadAMT(ctx, bs, c)
+	require.NoError(t, err)
+	assertEquals(ctx, t, a, numbers)
+	assertCount(t, a, 10)
+}
+
+func TestBatch(t *testing.T) {
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
 	a := NewAMT(bs)
 
-	a.Node.Bmap[0] = 0xff
-	a.Height = 10
-	a.Count = 10
-	c, err := bs.Put(ctx, a)
-	require.NoError(t, err)
+	require.NoError(t, a.BatchSet(ctx, numbers))
+	assertEquals(ctx, t, a, numbers)
 
-	a2, err := LoadAMT(ctx, bs, c)
-	require.NoError(t, err)
-	var out string
-	err = a2.Get(ctx, 100, &out)
-	require.Error(t, err)
+	c, err := a.Flush(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clean, err := LoadAMT(ctx, bs, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertEquals(ctx, t, clean, numbers)
+	require.NoError(t, a.BatchDelete(ctx, []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}))
+	assertCount(t, a, 0)
+}
+
+func assertEquals(ctx context.Context, t testing.TB, a *Root, values []cbg.CBORMarshaler) {
+	require.NoError(t, a.ForEach(ctx, func(i uint64, val *cbg.Deferred) error {
+		var buf bytes.Buffer
+		require.NoError(t, values[i].MarshalCBOR(&buf))
+		require.Equal(t, buf.Bytes(), val.Raw)
+		return nil
+	}))
+	assertCount(t, a, uint64(len(values)))
 }
