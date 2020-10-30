@@ -202,15 +202,15 @@ func (n *node) forEachAt(ctx context.Context, bs cbor.IpldStore, height int, sta
 		if ln == nil {
 			continue
 		}
-		subn, err := ln.load(ctx, bs, height-1)
-		if err != nil {
-			return err
-		}
-
 		offs := offset + (uint64(i) * subCount)
 		nextOffs := offs + subCount
 		if start >= nextOffs {
 			continue
+		}
+
+		subn, err := ln.load(ctx, bs, height-1)
+		if err != nil {
+			return err
 		}
 
 		if err := subn.forEachAt(ctx, bs, height-1, start, offs, cb); err != nil {
