@@ -14,8 +14,8 @@ import (
 
 type node struct {
 	// these may both be nil if the node is empty (a root node)
-	links  [internal.Width]*link
-	values [internal.Width]*cbg.Deferred
+	links  []*link
+	values []*cbg.Deferred
 }
 
 var (
@@ -27,9 +27,40 @@ var (
 	errInvalidCount   = errors.New("amt count does not match number of elements")
 )
 
-func newNode(nd internal.Node, allowEmpty, expectLeaf bool) (*node, error) {
+func bmapBytes(width int) int {
+	return ((width + 7) / 8)
+}
+
+func makeBmap(width int) []byte {
+	return make([]byte, bmapBytes(width))
+}
+
+func checkBmap(bf []byte, width int) error {
+	expLen := bmapBytes(width)
+	if len(bf) != expLen {
+		return fmt.Errorf(
+			"expected bitfield to be %d bytes long, found bitfield with %d bytes",
+			expLen, len(bf),
+		)
+	}
+	rem := width % 8
+	if rem == 0 {
+		return nil
+	}
+	expUnset := 8 - rem
+	if bf[len(bf)-1]&^(uint8(0xff)>>uint(expUnset)) > 0 {
+		return fmt.Errorf("expected top %d bits of bitfield to be unset (width %d): %#b", expUnset, width, bf[len(bf)-1])
+	}
+	return nil
+}
+
+func newNode(nd internal.Node, width int, allowEmpty, expectLeaf bool) (*node, error) {
 	if len(nd.Links) > 0 && len(nd.Values) > 0 {
 		return nil, errLinksAndValues
+	}
+
+	if err := checkBmap(nd.Bmap, width); err != nil {
+		return nil, err
 	}
 
 	i := 0
@@ -38,7 +69,8 @@ func newNode(nd internal.Node, allowEmpty, expectLeaf bool) (*node, error) {
 		if !expectLeaf {
 			return nil, errLeafUnexpected
 		}
-		for x := uint(0); x < internal.Width; x++ {
+		n.values = make([]*cbg.Deferred, width)
+		for x := uint(0); x < uint(width); x++ {
 			if nd.Bmap[x/8]&(1<<(x%8)) > 0 {
 				if i >= len(nd.Values) {
 					return nil, fmt.Errorf("expected at least %d values, found %d", i+1, len(nd.Values))
@@ -55,7 +87,8 @@ func newNode(nd internal.Node, allowEmpty, expectLeaf bool) (*node, error) {
 			return nil, errLeafExpected
 		}
 
-		for x := uint(0); x < internal.Width; x++ {
+		n.links = make([]*link, width)
+		for x := uint(0); x < uint(width); x++ {
 			if nd.Bmap[x/8]&(1<<(x%8)) > 0 {
 				if i >= len(nd.Links) {
 					return nil, fmt.Errorf("expected at least %d links, found %d", i+1, len(nd.Links))
@@ -82,7 +115,12 @@ func newNode(nd internal.Node, allowEmpty, expectLeaf bool) (*node, error) {
 	return n, nil
 }
 
-func (nd *node) collapse(ctx context.Context, bs cbor.IpldStore, height int) (int, error) {
+func (nd *node) collapse(ctx context.Context, bs cbor.IpldStore, width, height int) (int, error) {
+	// No links at all?
+	if nd.links == nil {
+		return 0, nil
+	}
+
 	// If we have any links going "to the right", we can't collapse any
 	// more.
 	for _, l := range nd.links[1:] {
@@ -98,13 +136,13 @@ func (nd *node) collapse(ctx context.Context, bs cbor.IpldStore, height int) (in
 
 	// only one child, collapse it.
 
-	subn, err := nd.links[0].load(ctx, bs, height-1)
+	subn, err := nd.links[0].load(ctx, bs, width, height-1)
 	if err != nil {
 		return 0, err
 	}
 
 	// Collapse recursively.
-	newHeight, err := subn.collapse(ctx, bs, height-1)
+	newHeight, err := subn.collapse(ctx, bs, width, height-1)
 	if err != nil {
 		return 0, err
 	}
@@ -115,12 +153,22 @@ func (nd *node) collapse(ctx context.Context, bs cbor.IpldStore, height int) (in
 }
 
 func (nd *node) empty() bool {
-	return nd.links == [len(nd.links)]*link{} && nd.values == [len(nd.links)]*cbg.Deferred{}
+	for _, l := range nd.links {
+		if l != nil {
+			return false
+		}
+	}
+	for _, v := range nd.values {
+		if v != nil {
+			return false
+		}
+	}
+	return true
 }
 
-func (n *node) get(ctx context.Context, bs cbor.IpldStore, height int, i uint64, out interface{}) (bool, error) {
+func (n *node) get(ctx context.Context, bs cbor.IpldStore, width, height int, i uint64, out interface{}) (bool, error) {
 	if height == 0 {
-		d := n.values[i]
+		d := n.getValue(i)
 		if d == nil {
 			return false, nil
 		}
@@ -129,49 +177,49 @@ func (n *node) get(ctx context.Context, bs cbor.IpldStore, height int, i uint64,
 		}
 		return true, cbor.DecodeInto(d.Raw, out)
 	}
-	nfh := nodesForHeight(height)
-	ln := n.links[i/nfh]
+	nfh := nodesForHeight(width, height)
+	ln := n.getLink(i / nfh)
 	if ln == nil {
 		return false, nil
 	}
-	subn, err := ln.load(ctx, bs, height-1)
+	subn, err := ln.load(ctx, bs, width, height-1)
 	if err != nil {
 		return false, err
 	}
 
-	return subn.get(ctx, bs, height-1, i%nfh, out)
+	return subn.get(ctx, bs, width, height-1, i%nfh, out)
 }
 
-func (n *node) delete(ctx context.Context, bs cbor.IpldStore, height int, i uint64) (bool, error) {
+func (n *node) delete(ctx context.Context, bs cbor.IpldStore, width, height int, i uint64) (bool, error) {
 	if height == 0 {
-		if n.values[i] == nil {
+		if n.getValue(i) == nil {
 			return false, nil
 		}
 
-		n.values[i] = nil
+		n.setValue(width, i, nil)
 		return true, nil
 	}
 
-	nfh := nodesForHeight(height)
+	nfh := nodesForHeight(width, height)
 	subi := i / nfh
 
-	ln := n.links[subi]
+	ln := n.getLink(subi)
 	if ln == nil {
 		return false, nil
 	}
-	subn, err := ln.load(ctx, bs, height-1)
+	subn, err := ln.load(ctx, bs, width, height-1)
 	if err != nil {
 		return false, err
 	}
 
-	if deleted, err := subn.delete(ctx, bs, height-1, i%nfh); err != nil {
+	if deleted, err := subn.delete(ctx, bs, width, height-1, i%nfh); err != nil {
 		return false, err
 	} else if !deleted {
 		return false, nil
 	}
 
 	if subn.empty() {
-		n.links[subi] = nil
+		n.setLink(width, subi, nil)
 	} else {
 		ln.dirty = true
 	}
@@ -179,7 +227,7 @@ func (n *node) delete(ctx context.Context, bs cbor.IpldStore, height int, i uint
 	return true, nil
 }
 
-func (n *node) forEachAt(ctx context.Context, bs cbor.IpldStore, height int, start, offset uint64, cb func(uint64, *cbg.Deferred) error) error {
+func (n *node) forEachAt(ctx context.Context, bs cbor.IpldStore, width, height int, start, offset uint64, cb func(uint64, *cbg.Deferred) error) error {
 	if height == 0 {
 		for i, v := range n.values {
 			if v != nil {
@@ -197,23 +245,24 @@ func (n *node) forEachAt(ctx context.Context, bs cbor.IpldStore, height int, sta
 		return nil
 	}
 
-	subCount := nodesForHeight(height)
+	subCount := nodesForHeight(width, height)
 	for i, ln := range n.links {
 		if ln == nil {
 			continue
 		}
+
 		offs := offset + (uint64(i) * subCount)
 		nextOffs := offs + subCount
 		if start >= nextOffs {
 			continue
 		}
 
-		subn, err := ln.load(ctx, bs, height-1)
+		subn, err := ln.load(ctx, bs, width, height-1)
 		if err != nil {
 			return err
 		}
 
-		if err := subn.forEachAt(ctx, bs, height-1, start, offs, cb); err != nil {
+		if err := subn.forEachAt(ctx, bs, width, height-1, start, offs, cb); err != nil {
 			return err
 		}
 	}
@@ -223,7 +272,7 @@ func (n *node) forEachAt(ctx context.Context, bs cbor.IpldStore, height int, sta
 
 var errNoVals = fmt.Errorf("no values")
 
-func (n *node) firstSetIndex(ctx context.Context, bs cbor.IpldStore, height int) (uint64, error) {
+func (n *node) firstSetIndex(ctx context.Context, bs cbor.IpldStore, width, height int) (uint64, error) {
 	if height == 0 {
 		for i, v := range n.values {
 			if v != nil {
@@ -239,56 +288,58 @@ func (n *node) firstSetIndex(ctx context.Context, bs cbor.IpldStore, height int)
 			// nothing here.
 			continue
 		}
-		subn, err := ln.load(ctx, bs, height-1)
+		subn, err := ln.load(ctx, bs, width, height-1)
 		if err != nil {
 			return 0, err
 		}
-		ix, err := subn.firstSetIndex(ctx, bs, height-1)
+		ix, err := subn.firstSetIndex(ctx, bs, width, height-1)
 		if err != nil {
 			return 0, err
 		}
 
-		subCount := nodesForHeight(height)
+		subCount := nodesForHeight(width, height)
 		return ix + (uint64(i) * subCount), nil
 	}
 
 	return 0, errNoVals
 }
 
-func (n *node) set(ctx context.Context, bs cbor.IpldStore, height int, i uint64, val *cbg.Deferred) (bool, error) {
+func (n *node) set(ctx context.Context, bs cbor.IpldStore, width, height int, i uint64, val *cbg.Deferred) (bool, error) {
 	if height == 0 {
-		alreadySet := n.values[i] != nil
-		n.values[i] = val
+		alreadySet := n.getValue(i) != nil
+		n.setValue(width, i, val)
 		return !alreadySet, nil
 	}
 
-	nfh := nodesForHeight(height)
+	nfh := nodesForHeight(width, height)
 
 	// Load but don't mark dirty or actually link in any _new_ intermediate
 	// nodes. We'll do that on return if nothing goes wrong.
-	ln := n.links[i/nfh]
+	ln := n.getLink(i / nfh)
 	if ln == nil {
 		ln = &link{cached: new(node)}
 	}
-	subn, err := ln.load(ctx, bs, height-1)
+	subn, err := ln.load(ctx, bs, width, height-1)
 	if err != nil {
 		return false, err
 	}
 
-	nodeAdded, err := subn.set(ctx, bs, height-1, i%nfh, val)
+	nodeAdded, err := subn.set(ctx, bs, width, height-1, i%nfh, val)
 	if err != nil {
 		return false, err
 	}
 
 	// Make all modifications on the way back up if there was no error.
 	ln.dirty = true // only mark dirty on success.
-	n.links[i/nfh] = ln
+	n.setLink(width, i/nfh, ln)
 
 	return nodeAdded, nil
 }
 
-func (n *node) flush(ctx context.Context, bs cbor.IpldStore, height int) (*internal.Node, error) {
-	var nd internal.Node
+func (n *node) flush(ctx context.Context, bs cbor.IpldStore, width, height int) (*internal.Node, error) {
+	nd := new(internal.Node)
+	nd.Bmap = makeBmap(width)
+
 	if height == 0 {
 		for i, val := range n.values {
 			if val == nil {
@@ -297,7 +348,7 @@ func (n *node) flush(ctx context.Context, bs cbor.IpldStore, height int) (*inter
 			nd.Values = append(nd.Values, val)
 			nd.Bmap[i/8] |= 1 << (uint(i) % 8)
 		}
-		return &nd, nil
+		return nd, nil
 	}
 
 	for i, ln := range n.links {
@@ -308,7 +359,7 @@ func (n *node) flush(ctx context.Context, bs cbor.IpldStore, height int) (*inter
 			if ln.cached == nil {
 				return nil, fmt.Errorf("expected dirty node to be cached")
 			}
-			subn, err := ln.cached.flush(ctx, bs, height-1)
+			subn, err := ln.cached.flush(ctx, bs, width, height-1)
 			if err != nil {
 				return nil, err
 			}
@@ -324,5 +375,39 @@ func (n *node) flush(ctx context.Context, bs cbor.IpldStore, height int) (*inter
 		nd.Bmap[i/8] |= 1 << (uint(i) % 8)
 	}
 
-	return &nd, nil
+	return nd, nil
+}
+
+func (n *node) setLink(width int, i uint64, l *link) {
+	if n.links == nil {
+		if l == nil {
+			return
+		}
+		n.links = make([]*link, width)
+	}
+	n.links[i] = l
+}
+
+func (n *node) getLink(i uint64) *link {
+	if n.links == nil {
+		return nil
+	}
+	return n.links[i]
+}
+
+func (n *node) setValue(width int, i uint64, v *cbg.Deferred) {
+	if n.values == nil {
+		if v == nil {
+			return
+		}
+		n.values = make([]*cbg.Deferred, width)
+	}
+	n.values[i] = v
+}
+
+func (n *node) getValue(i uint64) *cbg.Deferred {
+	if n.values == nil {
+		return nil
+	}
+	return n.values[i]
 }

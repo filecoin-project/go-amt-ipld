@@ -15,14 +15,14 @@ type link struct {
 	dirty  bool
 }
 
-func (l *link) load(ctx context.Context, bs cbor.IpldStore, height int) (*node, error) {
+func (l *link) load(ctx context.Context, bs cbor.IpldStore, width, height int) (*node, error) {
 	if l.cached == nil {
 		var nd internal.Node
 		if err := bs.Get(ctx, l.cid, &nd); err != nil {
 			return nil, err
 		}
 
-		n, err := newNode(nd, false, height == 0)
+		n, err := newNode(nd, width, false, height == 0)
 		if err != nil {
 			return nil, err
 		}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"sort"
 
 	cid "github.com/ipfs/go-cid"
@@ -16,12 +17,12 @@ import (
 
 var log = logging.Logger("amt")
 
-// MaxIndex is the maximum index for elements in the AMT. This is currently 1^63
-// (max int) because the width is 8. That means every "level" consumes 3 bits
-// from the index, and 63/3 is a nice even 21
-const MaxIndex = uint64(1<<internal.MaxIndexBits) - 1
+// MaxIndex is the maximum index for elements in the AMT. This MaxInt64-1 so we
+// don't overflow MaxUint64 when computing the length.
+const MaxIndex = math.MaxUint64 - 1
 
 type Root struct {
+	width  int
 	height int
 	count  uint64
 
@@ -30,33 +31,61 @@ type Root struct {
 	store cbor.IpldStore
 }
 
-func NewAMT(bs cbor.IpldStore) *Root {
+func NewAMT(bs cbor.IpldStore, opts ...Option) (*Root, error) {
+	cfg := defaultConfig()
+	for _, opt := range opts {
+		if err := opt(cfg); err != nil {
+			return nil, err
+		}
+	}
+
 	return &Root{
+		width: cfg.width,
 		store: bs,
 		node:  new(node),
-	}
+	}, nil
 }
 
-func LoadAMT(ctx context.Context, bs cbor.IpldStore, c cid.Cid) (*Root, error) {
+func LoadAMT(ctx context.Context, bs cbor.IpldStore, c cid.Cid, opts ...Option) (*Root, error) {
+	cfg := defaultConfig()
+	for _, opt := range opts {
+		if err := opt(cfg); err != nil {
+			return nil, err
+		}
+	}
+
 	var r internal.Root
 	if err := bs.Get(ctx, c, &r); err != nil {
 		return nil, err
 	}
-	if r.Height > internal.MaxHeight {
-		return nil, fmt.Errorf("failed to load AMT: height out of bounds: %d > %d", r.Height, internal.MaxHeight)
+
+	// Make sure the height is sane to prevent any integer overflows later. The minimum width is 2
+	if r.Height > 64 {
+		return nil, fmt.Errorf("height greater than 64: %d", r.Height)
 	}
-	if nodesForHeight(int(r.Height+1)) < r.Count {
+
+	maxNodes := nodesForHeight(cfg.width, int(r.Height+1))
+	// nodesForHeight saturates. If "max nodes" is max uint64, the maximum
+	// number of nodes at the previous level muss be less. This is the
+	// simplest way to check to see if the height is sane.
+	if maxNodes == math.MaxUint64 && nodesForHeight(cfg.width, int(r.Height)) == math.MaxUint64 {
+		return nil, fmt.Errorf("failed to load AMT: height %d out of bounds", r.Height)
+	}
+
+	// If max nodes is less than the count, something is wrong.
+	if maxNodes < r.Count {
 		return nil, fmt.Errorf(
 			"failed to load AMT: not tall enough (%d) for count (%d)", r.Height, r.Count,
 		)
 	}
 
-	nd, err := newNode(r.Node, r.Height == 0, r.Height == 0)
+	nd, err := newNode(r.Node, cfg.width, r.Height == 0, r.Height == 0)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Root{
+		width:  cfg.width,
 		height: int(r.Height),
 		count:  r.Count,
 		node:   nd,
@@ -64,8 +93,11 @@ func LoadAMT(ctx context.Context, bs cbor.IpldStore, c cid.Cid) (*Root, error) {
 	}, nil
 }
 
-func FromArray(ctx context.Context, bs cbor.IpldStore, vals []cbg.CBORMarshaler) (cid.Cid, error) {
-	r := NewAMT(bs)
+func FromArray(ctx context.Context, bs cbor.IpldStore, vals []cbg.CBORMarshaler, opts ...Option) (cid.Cid, error) {
+	r, err := NewAMT(bs)
+	if err != nil {
+		return cid.Undef, err
+	}
 	if err := r.BatchSet(ctx, vals); err != nil {
 		return cid.Undef, err
 	}
@@ -93,22 +125,19 @@ func (r *Root) Set(ctx context.Context, i uint64, val interface{}) error {
 		}
 	}
 
-	for i >= nodesForHeight(r.height+1) {
+	for i >= nodesForHeight(r.width, r.height+1) {
 		if !r.node.empty() {
 			nd := r.node
-			r.node = &node{
-				links: [internal.Width]*link{
-					0: {
-						dirty:  true,
-						cached: nd,
-					},
-				},
+			r.node = &node{links: make([]*link, r.width)}
+			r.node.links[0] = &link{
+				dirty:  true,
+				cached: nd,
 			}
 		}
 		r.height++
 	}
 
-	addVal, err := r.node.set(ctx, r.store, int(r.height), i, &cbg.Deferred{Raw: b})
+	addVal, err := r.node.set(ctx, r.store, r.width, int(r.height), i, &cbg.Deferred{Raw: b})
 	if err != nil {
 		return err
 	}
@@ -139,10 +168,10 @@ func (r *Root) Get(ctx context.Context, i uint64, out interface{}) error {
 		return fmt.Errorf("index %d is out of range for the amt", i)
 	}
 
-	if i >= nodesForHeight(int(r.height+1)) {
+	if i >= nodesForHeight(r.width, int(r.height+1)) {
 		return &ErrNotFound{Index: i}
 	}
-	if found, err := r.node.get(ctx, r.store, int(r.height), i, out); err != nil {
+	if found, err := r.node.get(ctx, r.store, r.width, int(r.height), i, out); err != nil {
 		return err
 	} else if !found {
 		return &ErrNotFound{Index: i}
@@ -174,18 +203,18 @@ func (r *Root) Delete(ctx context.Context, i uint64) error {
 	if i > MaxIndex {
 		return fmt.Errorf("index %d is out of range for the amt", i)
 	}
-	if i >= nodesForHeight(int(r.height+1)) {
+	if i >= nodesForHeight(r.width, int(r.height+1)) {
 		return &ErrNotFound{i}
 	}
 
-	found, err := r.node.delete(ctx, r.store, int(r.height), i)
+	found, err := r.node.delete(ctx, r.store, r.width, int(r.height), i)
 	if err != nil {
 		return err
 	} else if !found {
 		return &ErrNotFound{i}
 	}
 
-	newHeight, err := r.node.collapse(ctx, r.store, r.height)
+	newHeight, err := r.node.collapse(ctx, r.store, r.width, r.height)
 	if err != nil {
 		return err
 	}
@@ -210,19 +239,19 @@ func (r *Root) Subtract(ctx context.Context, or *Root) error {
 }
 
 func (r *Root) ForEach(ctx context.Context, cb func(uint64, *cbg.Deferred) error) error {
-	return r.node.forEachAt(ctx, r.store, r.height, 0, 0, cb)
+	return r.node.forEachAt(ctx, r.store, r.width, r.height, 0, 0, cb)
 }
 
 func (r *Root) ForEachAt(ctx context.Context, start uint64, cb func(uint64, *cbg.Deferred) error) error {
-	return r.node.forEachAt(ctx, r.store, r.height, start, 0, cb)
+	return r.node.forEachAt(ctx, r.store, r.width, r.height, start, 0, cb)
 }
 
 func (r *Root) FirstSetIndex(ctx context.Context) (uint64, error) {
-	return r.node.firstSetIndex(ctx, r.store, r.height)
+	return r.node.firstSetIndex(ctx, r.store, r.width, r.height)
 }
 
 func (r *Root) Flush(ctx context.Context) (cid.Cid, error) {
-	nd, err := r.node.flush(ctx, r.store, r.height)
+	nd, err := r.node.flush(ctx, r.store, r.width, r.height)
 	if err != nil {
 		return cid.Undef, err
 	}
