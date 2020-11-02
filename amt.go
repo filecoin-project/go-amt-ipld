@@ -17,9 +17,12 @@ import (
 
 var log = logging.Logger("amt")
 
-// MaxIndex is the maximum index for elements in the AMT. This MaxInt64-1 so we
+// MaxIndex is the maximum index for elements in the AMT. This MaxUint64-1 so we
 // don't overflow MaxUint64 when computing the length.
 const MaxIndex = math.MaxUint64 - 1
+
+// MinBitWidth is the minimum allowed degree for AMT nodes.
+const MinBitWidth = 2
 
 type Root struct {
 	width  int
@@ -59,7 +62,10 @@ func LoadAMT(ctx context.Context, bs cbor.IpldStore, c cid.Cid, opts ...Option) 
 		return nil, err
 	}
 
-	// Make sure the height is sane to prevent any integer overflows later. The minimum width is 2
+	// Make sure the height is sane to prevent any integer overflows later
+	// (e.g., height+1). While MaxUint64-1 would solve the "+1" issue, we
+	// might as well use 64 because the height cannot be greater than 62
+	// (min width = 2, 2**64 == max elements).
 	if r.Height > 64 {
 		return nil, fmt.Errorf("height greater than 64: %d", r.Height)
 	}
