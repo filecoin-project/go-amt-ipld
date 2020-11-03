@@ -31,7 +31,7 @@ func init() {
 func TestMain(m *testing.M) {
 	// Hack to test with multiple widths, without hassle.
 	for _, defaultBitWidth = range []int{
-		2, 3, 5, 8, 9, 11, 15, 16, 23,
+		2, 3, 5, 8, 9, 11, 15, 16, 18,
 	} {
 		fmt.Printf("WIDTH %d\n", defaultBitWidth)
 		if code := m.Run(); code != 0 {
@@ -790,7 +790,7 @@ func TestFirstSetIndex(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
 
-	vals := []uint64{0, 1, 5, uint64(defaultBitWidth), uint64(defaultBitWidth) + 1, 276, 1234, 62881923}
+	vals := []uint64{0, 1, 5, 1 << uint64(defaultBitWidth), 1<<uint64(defaultBitWidth) + 1, 276, 1234, 62881923}
 	for i, v := range vals {
 		t.Log(i, v)
 		a, err := NewAMT(bs)

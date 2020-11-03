@@ -36,7 +36,7 @@ func TestInvalidHeightSingle(t *testing.T) {
 }
 
 func TestInvalidHeightTall(t *testing.T) {
-	if defaultBitWidth >= 16 {
+	if bmapBytes(uint(defaultBitWidth)) >= 2 {
 		t.Skip("test only valid for widths less than 16")
 	}
 	bs := cbor.NewCborStore(newMockBlocks())

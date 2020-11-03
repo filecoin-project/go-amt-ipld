@@ -21,13 +21,10 @@ var log = logging.Logger("amt")
 // don't overflow MaxUint64 when computing the length.
 const MaxIndex = math.MaxUint64 - 1
 
-// MinBitWidth is the minimum allowed degree for AMT nodes.
-const MinBitWidth = 2
-
 type Root struct {
-	width  int
-	height int
-	count  uint64
+	bitWidth uint
+	height   int
+	count    uint64
 
 	node *node
 
@@ -43,9 +40,9 @@ func NewAMT(bs cbor.IpldStore, opts ...Option) (*Root, error) {
 	}
 
 	return &Root{
-		width: cfg.width,
-		store: bs,
-		node:  new(node),
+		bitWidth: cfg.bitWidth,
+		store:    bs,
+		node:     new(node),
 	}, nil
 }
 
@@ -70,11 +67,11 @@ func LoadAMT(ctx context.Context, bs cbor.IpldStore, c cid.Cid, opts ...Option) 
 		return nil, fmt.Errorf("height greater than 64: %d", r.Height)
 	}
 
-	maxNodes := nodesForHeight(cfg.width, int(r.Height+1))
+	maxNodes := nodesForHeight(cfg.bitWidth, int(r.Height+1))
 	// nodesForHeight saturates. If "max nodes" is max uint64, the maximum
 	// number of nodes at the previous level muss be less. This is the
 	// simplest way to check to see if the height is sane.
-	if maxNodes == math.MaxUint64 && nodesForHeight(cfg.width, int(r.Height)) == math.MaxUint64 {
+	if maxNodes == math.MaxUint64 && nodesForHeight(cfg.bitWidth, int(r.Height)) == math.MaxUint64 {
 		return nil, fmt.Errorf("failed to load AMT: height %d out of bounds", r.Height)
 	}
 
@@ -85,17 +82,17 @@ func LoadAMT(ctx context.Context, bs cbor.IpldStore, c cid.Cid, opts ...Option) 
 		)
 	}
 
-	nd, err := newNode(r.Node, cfg.width, r.Height == 0, r.Height == 0)
+	nd, err := newNode(r.Node, cfg.bitWidth, r.Height == 0, r.Height == 0)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Root{
-		width:  cfg.width,
-		height: int(r.Height),
-		count:  r.Count,
-		node:   nd,
-		store:  bs,
+		bitWidth: cfg.bitWidth,
+		height:   int(r.Height),
+		count:    r.Count,
+		node:     nd,
+		store:    bs,
 	}, nil
 }
 
@@ -131,10 +128,10 @@ func (r *Root) Set(ctx context.Context, i uint64, val interface{}) error {
 		}
 	}
 
-	for i >= nodesForHeight(r.width, r.height+1) {
+	for i >= nodesForHeight(r.bitWidth, r.height+1) {
 		if !r.node.empty() {
 			nd := r.node
-			r.node = &node{links: make([]*link, r.width)}
+			r.node = &node{links: make([]*link, 1<<r.bitWidth)}
 			r.node.links[0] = &link{
 				dirty:  true,
 				cached: nd,
@@ -143,7 +140,7 @@ func (r *Root) Set(ctx context.Context, i uint64, val interface{}) error {
 		r.height++
 	}
 
-	addVal, err := r.node.set(ctx, r.store, r.width, int(r.height), i, &cbg.Deferred{Raw: b})
+	addVal, err := r.node.set(ctx, r.store, r.bitWidth, int(r.height), i, &cbg.Deferred{Raw: b})
 	if err != nil {
 		return err
 	}
@@ -174,10 +171,10 @@ func (r *Root) Get(ctx context.Context, i uint64, out interface{}) error {
 		return fmt.Errorf("index %d is out of range for the amt", i)
 	}
 
-	if i >= nodesForHeight(r.width, int(r.height+1)) {
+	if i >= nodesForHeight(r.bitWidth, int(r.height+1)) {
 		return &ErrNotFound{Index: i}
 	}
-	if found, err := r.node.get(ctx, r.store, r.width, int(r.height), i, out); err != nil {
+	if found, err := r.node.get(ctx, r.store, r.bitWidth, int(r.height), i, out); err != nil {
 		return err
 	} else if !found {
 		return &ErrNotFound{Index: i}
@@ -209,18 +206,18 @@ func (r *Root) Delete(ctx context.Context, i uint64) error {
 	if i > MaxIndex {
 		return fmt.Errorf("index %d is out of range for the amt", i)
 	}
-	if i >= nodesForHeight(r.width, int(r.height+1)) {
+	if i >= nodesForHeight(r.bitWidth, int(r.height+1)) {
 		return &ErrNotFound{i}
 	}
 
-	found, err := r.node.delete(ctx, r.store, r.width, int(r.height), i)
+	found, err := r.node.delete(ctx, r.store, r.bitWidth, int(r.height), i)
 	if err != nil {
 		return err
 	} else if !found {
 		return &ErrNotFound{i}
 	}
 
-	newHeight, err := r.node.collapse(ctx, r.store, r.width, r.height)
+	newHeight, err := r.node.collapse(ctx, r.store, r.bitWidth, r.height)
 	if err != nil {
 		return err
 	}
@@ -245,19 +242,19 @@ func (r *Root) Subtract(ctx context.Context, or *Root) error {
 }
 
 func (r *Root) ForEach(ctx context.Context, cb func(uint64, *cbg.Deferred) error) error {
-	return r.node.forEachAt(ctx, r.store, r.width, r.height, 0, 0, cb)
+	return r.node.forEachAt(ctx, r.store, r.bitWidth, r.height, 0, 0, cb)
 }
 
 func (r *Root) ForEachAt(ctx context.Context, start uint64, cb func(uint64, *cbg.Deferred) error) error {
-	return r.node.forEachAt(ctx, r.store, r.width, r.height, start, 0, cb)
+	return r.node.forEachAt(ctx, r.store, r.bitWidth, r.height, start, 0, cb)
 }
 
 func (r *Root) FirstSetIndex(ctx context.Context) (uint64, error) {
-	return r.node.firstSetIndex(ctx, r.store, r.width, r.height)
+	return r.node.firstSetIndex(ctx, r.store, r.bitWidth, r.height)
 }
 
 func (r *Root) Flush(ctx context.Context) (cid.Cid, error) {
-	nd, err := r.node.flush(ctx, r.store, r.width, r.height)
+	nd, err := r.node.flush(ctx, r.store, r.bitWidth, r.height)
 	if err != nil {
 		return cid.Undef, err
 	}

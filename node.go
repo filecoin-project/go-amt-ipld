@@ -27,42 +27,26 @@ var (
 	errInvalidCount   = errors.New("amt count does not match number of elements")
 )
 
-func bmapBytes(width int) int {
-	return ((width + 7) / 8)
+func bmapBytes(bitWidth uint) int {
+	if bitWidth <= 3 {
+		return 1
+	}
+	return 1 << (bitWidth - 3)
 }
 
-func makeBmap(width int) []byte {
-	return make([]byte, bmapBytes(width))
-}
-
-func checkBmap(bf []byte, width int) error {
-	expLen := bmapBytes(width)
-	if len(bf) != expLen {
-		return fmt.Errorf(
-			"expected bitfield to be %d bytes long, found bitfield with %d bytes",
-			expLen, len(bf),
-		)
-	}
-	rem := width % 8
-	if rem == 0 {
-		return nil
-	}
-	expUnset := 8 - rem
-	if bf[len(bf)-1]&^(uint8(0xff)>>uint(expUnset)) > 0 {
-		return fmt.Errorf("expected top %d bits of bitfield to be unset (width %d): %#b", expUnset, width, bf[len(bf)-1])
-	}
-	return nil
-}
-
-func newNode(nd internal.Node, width int, allowEmpty, expectLeaf bool) (*node, error) {
+func newNode(nd internal.Node, bitWidth uint, allowEmpty, expectLeaf bool) (*node, error) {
 	if len(nd.Links) > 0 && len(nd.Values) > 0 {
 		return nil, errLinksAndValues
 	}
 
-	if err := checkBmap(nd.Bmap, width); err != nil {
-		return nil, err
+	if expWidth := bmapBytes(bitWidth); expWidth != len(nd.Bmap) {
+		return nil, fmt.Errorf(
+			"expected bitfield to be %d bytes long, found bitfield with %d bytes",
+			expWidth, len(nd.Bmap),
+		)
 	}
 
+	width := uint(1 << bitWidth)
 	i := 0
 	n := new(node)
 	if len(nd.Values) > 0 {
@@ -70,7 +54,7 @@ func newNode(nd internal.Node, width int, allowEmpty, expectLeaf bool) (*node, e
 			return nil, errLeafUnexpected
 		}
 		n.values = make([]*cbg.Deferred, width)
-		for x := uint(0); x < uint(width); x++ {
+		for x := uint(0); x < width; x++ {
 			if nd.Bmap[x/8]&(1<<(x%8)) > 0 {
 				if i >= len(nd.Values) {
 					return nil, fmt.Errorf("expected at least %d values, found %d", i+1, len(nd.Values))
@@ -88,7 +72,7 @@ func newNode(nd internal.Node, width int, allowEmpty, expectLeaf bool) (*node, e
 		}
 
 		n.links = make([]*link, width)
-		for x := uint(0); x < uint(width); x++ {
+		for x := uint(0); x < width; x++ {
 			if nd.Bmap[x/8]&(1<<(x%8)) > 0 {
 				if i >= len(nd.Links) {
 					return nil, fmt.Errorf("expected at least %d links, found %d", i+1, len(nd.Links))
@@ -115,7 +99,7 @@ func newNode(nd internal.Node, width int, allowEmpty, expectLeaf bool) (*node, e
 	return n, nil
 }
 
-func (nd *node) collapse(ctx context.Context, bs cbor.IpldStore, width, height int) (int, error) {
+func (nd *node) collapse(ctx context.Context, bs cbor.IpldStore, bitWidth uint, height int) (int, error) {
 	// No links at all?
 	if nd.links == nil {
 		return 0, nil
@@ -136,13 +120,13 @@ func (nd *node) collapse(ctx context.Context, bs cbor.IpldStore, width, height i
 
 	// only one child, collapse it.
 
-	subn, err := nd.links[0].load(ctx, bs, width, height-1)
+	subn, err := nd.links[0].load(ctx, bs, bitWidth, height-1)
 	if err != nil {
 		return 0, err
 	}
 
 	// Collapse recursively.
-	newHeight, err := subn.collapse(ctx, bs, width, height-1)
+	newHeight, err := subn.collapse(ctx, bs, bitWidth, height-1)
 	if err != nil {
 		return 0, err
 	}
@@ -166,7 +150,7 @@ func (nd *node) empty() bool {
 	return true
 }
 
-func (n *node) get(ctx context.Context, bs cbor.IpldStore, width, height int, i uint64, out interface{}) (bool, error) {
+func (n *node) get(ctx context.Context, bs cbor.IpldStore, bitWidth uint, height int, i uint64, out interface{}) (bool, error) {
 	if height == 0 {
 		d := n.getValue(i)
 		if d == nil {
@@ -177,49 +161,49 @@ func (n *node) get(ctx context.Context, bs cbor.IpldStore, width, height int, i 
 		}
 		return true, cbor.DecodeInto(d.Raw, out)
 	}
-	nfh := nodesForHeight(width, height)
+	nfh := nodesForHeight(bitWidth, height)
 	ln := n.getLink(i / nfh)
 	if ln == nil {
 		return false, nil
 	}
-	subn, err := ln.load(ctx, bs, width, height-1)
+	subn, err := ln.load(ctx, bs, bitWidth, height-1)
 	if err != nil {
 		return false, err
 	}
 
-	return subn.get(ctx, bs, width, height-1, i%nfh, out)
+	return subn.get(ctx, bs, bitWidth, height-1, i%nfh, out)
 }
 
-func (n *node) delete(ctx context.Context, bs cbor.IpldStore, width, height int, i uint64) (bool, error) {
+func (n *node) delete(ctx context.Context, bs cbor.IpldStore, bitWidth uint, height int, i uint64) (bool, error) {
 	if height == 0 {
 		if n.getValue(i) == nil {
 			return false, nil
 		}
 
-		n.setValue(width, i, nil)
+		n.setValue(bitWidth, i, nil)
 		return true, nil
 	}
 
-	nfh := nodesForHeight(width, height)
+	nfh := nodesForHeight(bitWidth, height)
 	subi := i / nfh
 
 	ln := n.getLink(subi)
 	if ln == nil {
 		return false, nil
 	}
-	subn, err := ln.load(ctx, bs, width, height-1)
+	subn, err := ln.load(ctx, bs, bitWidth, height-1)
 	if err != nil {
 		return false, err
 	}
 
-	if deleted, err := subn.delete(ctx, bs, width, height-1, i%nfh); err != nil {
+	if deleted, err := subn.delete(ctx, bs, bitWidth, height-1, i%nfh); err != nil {
 		return false, err
 	} else if !deleted {
 		return false, nil
 	}
 
 	if subn.empty() {
-		n.setLink(width, subi, nil)
+		n.setLink(bitWidth, subi, nil)
 	} else {
 		ln.dirty = true
 	}
@@ -227,7 +211,7 @@ func (n *node) delete(ctx context.Context, bs cbor.IpldStore, width, height int,
 	return true, nil
 }
 
-func (n *node) forEachAt(ctx context.Context, bs cbor.IpldStore, width, height int, start, offset uint64, cb func(uint64, *cbg.Deferred) error) error {
+func (n *node) forEachAt(ctx context.Context, bs cbor.IpldStore, bitWidth uint, height int, start, offset uint64, cb func(uint64, *cbg.Deferred) error) error {
 	if height == 0 {
 		for i, v := range n.values {
 			if v != nil {
@@ -245,7 +229,7 @@ func (n *node) forEachAt(ctx context.Context, bs cbor.IpldStore, width, height i
 		return nil
 	}
 
-	subCount := nodesForHeight(width, height)
+	subCount := nodesForHeight(bitWidth, height)
 	for i, ln := range n.links {
 		if ln == nil {
 			continue
@@ -257,12 +241,12 @@ func (n *node) forEachAt(ctx context.Context, bs cbor.IpldStore, width, height i
 			continue
 		}
 
-		subn, err := ln.load(ctx, bs, width, height-1)
+		subn, err := ln.load(ctx, bs, bitWidth, height-1)
 		if err != nil {
 			return err
 		}
 
-		if err := subn.forEachAt(ctx, bs, width, height-1, start, offs, cb); err != nil {
+		if err := subn.forEachAt(ctx, bs, bitWidth, height-1, start, offs, cb); err != nil {
 			return err
 		}
 	}
@@ -272,7 +256,7 @@ func (n *node) forEachAt(ctx context.Context, bs cbor.IpldStore, width, height i
 
 var errNoVals = fmt.Errorf("no values")
 
-func (n *node) firstSetIndex(ctx context.Context, bs cbor.IpldStore, width, height int) (uint64, error) {
+func (n *node) firstSetIndex(ctx context.Context, bs cbor.IpldStore, bitWidth uint, height int) (uint64, error) {
 	if height == 0 {
 		for i, v := range n.values {
 			if v != nil {
@@ -288,30 +272,30 @@ func (n *node) firstSetIndex(ctx context.Context, bs cbor.IpldStore, width, heig
 			// nothing here.
 			continue
 		}
-		subn, err := ln.load(ctx, bs, width, height-1)
+		subn, err := ln.load(ctx, bs, bitWidth, height-1)
 		if err != nil {
 			return 0, err
 		}
-		ix, err := subn.firstSetIndex(ctx, bs, width, height-1)
+		ix, err := subn.firstSetIndex(ctx, bs, bitWidth, height-1)
 		if err != nil {
 			return 0, err
 		}
 
-		subCount := nodesForHeight(width, height)
+		subCount := nodesForHeight(bitWidth, height)
 		return ix + (uint64(i) * subCount), nil
 	}
 
 	return 0, errNoVals
 }
 
-func (n *node) set(ctx context.Context, bs cbor.IpldStore, width, height int, i uint64, val *cbg.Deferred) (bool, error) {
+func (n *node) set(ctx context.Context, bs cbor.IpldStore, bitWidth uint, height int, i uint64, val *cbg.Deferred) (bool, error) {
 	if height == 0 {
 		alreadySet := n.getValue(i) != nil
-		n.setValue(width, i, val)
+		n.setValue(bitWidth, i, val)
 		return !alreadySet, nil
 	}
 
-	nfh := nodesForHeight(width, height)
+	nfh := nodesForHeight(bitWidth, height)
 
 	// Load but don't mark dirty or actually link in any _new_ intermediate
 	// nodes. We'll do that on return if nothing goes wrong.
@@ -319,26 +303,26 @@ func (n *node) set(ctx context.Context, bs cbor.IpldStore, width, height int, i 
 	if ln == nil {
 		ln = &link{cached: new(node)}
 	}
-	subn, err := ln.load(ctx, bs, width, height-1)
+	subn, err := ln.load(ctx, bs, bitWidth, height-1)
 	if err != nil {
 		return false, err
 	}
 
-	nodeAdded, err := subn.set(ctx, bs, width, height-1, i%nfh, val)
+	nodeAdded, err := subn.set(ctx, bs, bitWidth, height-1, i%nfh, val)
 	if err != nil {
 		return false, err
 	}
 
 	// Make all modifications on the way back up if there was no error.
 	ln.dirty = true // only mark dirty on success.
-	n.setLink(width, i/nfh, ln)
+	n.setLink(bitWidth, i/nfh, ln)
 
 	return nodeAdded, nil
 }
 
-func (n *node) flush(ctx context.Context, bs cbor.IpldStore, width, height int) (*internal.Node, error) {
+func (n *node) flush(ctx context.Context, bs cbor.IpldStore, bitWidth uint, height int) (*internal.Node, error) {
 	nd := new(internal.Node)
-	nd.Bmap = makeBmap(width)
+	nd.Bmap = make([]byte, bmapBytes(bitWidth))
 
 	if height == 0 {
 		for i, val := range n.values {
@@ -359,7 +343,7 @@ func (n *node) flush(ctx context.Context, bs cbor.IpldStore, width, height int) 
 			if ln.cached == nil {
 				return nil, fmt.Errorf("expected dirty node to be cached")
 			}
-			subn, err := ln.cached.flush(ctx, bs, width, height-1)
+			subn, err := ln.cached.flush(ctx, bs, bitWidth, height-1)
 			if err != nil {
 				return nil, err
 			}
@@ -378,12 +362,12 @@ func (n *node) flush(ctx context.Context, bs cbor.IpldStore, width, height int) 
 	return nd, nil
 }
 
-func (n *node) setLink(width int, i uint64, l *link) {
+func (n *node) setLink(bitWidth uint, i uint64, l *link) {
 	if n.links == nil {
 		if l == nil {
 			return
 		}
-		n.links = make([]*link, width)
+		n.links = make([]*link, 1<<bitWidth)
 	}
 	n.links[i] = l
 }
@@ -395,12 +379,12 @@ func (n *node) getLink(i uint64) *link {
 	return n.links[i]
 }
 
-func (n *node) setValue(width int, i uint64, v *cbg.Deferred) {
+func (n *node) setValue(bitWidth uint, i uint64, v *cbg.Deferred) {
 	if n.values == nil {
 		if v == nil {
 			return
 		}
-		n.values = make([]*cbg.Deferred, width)
+		n.values = make([]*cbg.Deferred, 1<<bitWidth)
 	}
 	n.values[i] = v
 }
