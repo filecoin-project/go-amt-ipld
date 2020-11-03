@@ -30,9 +30,7 @@ func init() {
 
 func TestMain(m *testing.M) {
 	// Hack to test with multiple widths, without hassle.
-	for _, defaultBitWidth = range []int{
-		2, 3, 5, 8, 9, 11, 15, 16, 18,
-	} {
+	for defaultBitWidth = 2; defaultBitWidth <= 18; defaultBitWidth++ {
 		fmt.Printf("WIDTH %d\n", defaultBitWidth)
 		if code := m.Run(); code != 0 {
 			os.Exit(code)
