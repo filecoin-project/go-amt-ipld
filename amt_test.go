@@ -686,6 +686,14 @@ func TestForEach(t *testing.T) {
 
 	assertCount(t, a, uint64(len(indexes)))
 
+	assert.Equal(t, bsStats{r: 585, w: 585, br: 36227, bw: 36227}, trackingBs.stats)
+	err := a.ForEach(ctx, func(i uint64, v *cbg.Deferred) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	c, err := a.Flush(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -698,6 +706,7 @@ func TestForEach(t *testing.T) {
 
 	assertCount(t, na, uint64(len(indexes)))
 
+	assert.Equal(t, bsStats{r: 586, w: 2016, br: 36366, bw: 124875}, trackingBs.stats)
 	var x int
 	err = na.ForEach(ctx, func(i uint64, v *cbg.Deferred) error {
 		if i != indexes[x] {
@@ -712,8 +721,59 @@ func TestForEach(t *testing.T) {
 	if x != len(indexes) {
 		t.Fatal("didnt see enough values")
 	}
+
+	err = na.ForEach(ctx, func(i uint64, v *cbg.Deferred) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	assert.Equal(t, "bafy2bzaceccb5cgeysdu6ferucawc6twfedv5gc3iqgh2ko7o7e25r5ucpf4u", c.String())
-	assert.Equal(t, bsStats{r: 2016, w: 2016, br: 124875, bw: 124875}, trackingBs.stats)
+	assert.Equal(t, bsStats{r: 3446, w: 2016, br: 213384, bw: 124875}, trackingBs.stats)
+}
+
+// Test is for specs-actors functionality that needs to be matched
+func TestForEachMutate(t *testing.T) {
+	trackingBs := newMockBlocks()
+	bs := cbor.NewCborStore(trackingBs)
+	ctx := context.Background()
+	a := NewAMT(bs)
+
+	indexes := []uint64{1, 9, 66, 74, 82, 515}
+
+	for _, i := range indexes {
+		if err := a.Set(ctx, i, "value"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	c, err := a.Flush(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	na, err := LoadAMT(ctx, bs, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := na.ForEach(ctx, func(i uint64, v *cbg.Deferred) error {
+		// if err := out.UnmarshalCBOR(bytes.NewReader(val.Raw)); err != nil {
+		// 	return err
+		// }
+		if i == 1 || i == 74 {
+			if err := na.Set(ctx, i, v); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	assert.Equal(t, "bafy2bzacecipze2lcvpcrcqy4nyqs4p2sinbytflyyuytge5lc6uz632bj6fu", c.String())
+	assert.Equal(t, bsStats{r: 17, w: 12, br: 910, bw: 572}, trackingBs.stats)
 }
 
 func TestForEachAt(t *testing.T) {
