@@ -872,6 +872,25 @@ func TestFromArray(t *testing.T) {
 	assertCount(t, a, 10)
 }
 
+func TestForEachSkip(t *testing.T) {
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
+
+	a := NewAMT(bs)
+	require.NoError(t, a.Set(ctx, 0, 0))
+	require.NoError(t, a.Set(ctx, 199, 0))
+	require.NoError(t, a.Set(ctx, 201, 0))
+	require.NoError(t, a.Set(ctx, 10000, 0))
+	require.NoError(t, a.Set(ctx, 10001, 0))
+	require.NoError(t, a.Set(ctx, 11001, 0))
+	var keys []uint64
+	require.NoError(t, a.ForEachAt(ctx, 200, func(i uint64, _ *cbg.Deferred) error {
+		keys = append(keys, i)
+		return nil
+	}))
+	require.Equal(t, []uint64{201, 10000, 10001, 11001}, keys)
+}
+
 func TestBatch(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
