@@ -12,7 +12,8 @@ type Node struct {
 }
 
 type Root struct {
-	Height uint64
-	Count  uint64
-	Node   Node
+	BitWidth uint64
+	Height   uint64
+	Count    uint64
+	Node     Node
 }

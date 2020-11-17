@@ -13,7 +13,7 @@ import (
 
 var _ = xerrors.Errorf
 
-var lengthBufRoot = []byte{131}
+var lengthBufRoot = []byte{132}
 
 func (t *Root) MarshalCBOR(w io.Writer) error {
 	if t == nil {
@@ -25,6 +25,12 @@ func (t *Root) MarshalCBOR(w io.Writer) error {
 	}
 
 	scratch := make([]byte, 9)
+
+	// t.BitWidth (uint64) (uint64)
+
+	if err := cbg.WriteMajorTypeHeaderBuf(scratch, w, cbg.MajUnsignedInt, uint64(t.BitWidth)); err != nil {
+		return err
+	}
 
 	// t.Height (uint64) (uint64)
 
@@ -59,10 +65,24 @@ func (t *Root) UnmarshalCBOR(r io.Reader) error {
 		return fmt.Errorf("cbor input should be of type array")
 	}
 
-	if extra != 3 {
+	if extra != 4 {
 		return fmt.Errorf("cbor input had wrong number of fields")
 	}
 
+	// t.BitWidth (uint64) (uint64)
+
+	{
+
+		maj, extra, err = cbg.CborReadHeaderBuf(br, scratch)
+		if err != nil {
+			return err
+		}
+		if maj != cbg.MajUnsignedInt {
+			return fmt.Errorf("wrong type for uint64 field")
+		}
+		t.BitWidth = uint64(extra)
+
+	}
 	// t.Height (uint64) (uint64)
 
 	{

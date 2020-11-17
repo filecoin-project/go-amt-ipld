@@ -59,6 +59,13 @@ func LoadAMT(ctx context.Context, bs cbor.IpldStore, c cid.Cid, opts ...Option) 
 		return nil, err
 	}
 
+	// Check the bitwidth but don't rely on it. We may add an option in the
+	// future to just discover the bitwidth from the AMT, but we need to be
+	// careful to not just trust the value.
+	if r.BitWidth != uint64(cfg.bitWidth) {
+		return nil, fmt.Errorf("expected bitwidth %d but AMT has bitwidth %d", cfg.bitWidth, r.BitWidth)
+	}
+
 	// Make sure the height is sane to prevent any integer overflows later
 	// (e.g., height+1). While MaxUint64-1 would solve the "+1" issue, we
 	// might as well use 64 because the height cannot be greater than 62
@@ -259,9 +266,10 @@ func (r *Root) Flush(ctx context.Context) (cid.Cid, error) {
 		return cid.Undef, err
 	}
 	root := internal.Root{
-		Height: uint64(r.height),
-		Count:  r.count,
-		Node:   *nd,
+		BitWidth: uint64(r.bitWidth),
+		Height:   uint64(r.height),
+		Count:    r.count,
+		Node:     *nd,
 	}
 	return r.store.Put(ctx, &root)
 }
