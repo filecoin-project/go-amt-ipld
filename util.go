@@ -1,12 +1,12 @@
 package amt
 
-import "github.com/filecoin-project/go-amt-ipld/v3/internal"
+import "math"
 
-func nodesForHeight(height int) uint64 {
-	heightLogTwo := uint64(internal.WidthBits * height)
+func nodesForHeight(bitWidth uint, height int) uint64 {
+	heightLogTwo := uint64(bitWidth) * uint64(height)
 	if heightLogTwo >= 64 {
-		// Should never happen. Max height is checked at all entry points.
-		panic("height overflow")
+		// The max depth layer may not be full.
+		return math.MaxUint64
 	}
 	return 1 << heightLogTwo
 }

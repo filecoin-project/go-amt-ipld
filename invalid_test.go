@@ -11,7 +11,8 @@ import (
 func TestInvalidHeightEmpty(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 	a.height = 1
 	c, err := a.Flush(ctx)
 	require.NoError(t, err)
@@ -22,8 +23,9 @@ func TestInvalidHeightEmpty(t *testing.T) {
 func TestInvalidHeightSingle(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
-	a := NewAMT(bs)
-	err := a.Set(ctx, 0, 0)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
+	err = a.Set(ctx, 0, 0)
 	require.NoError(t, err)
 
 	a.height = 1
@@ -34,10 +36,14 @@ func TestInvalidHeightSingle(t *testing.T) {
 }
 
 func TestInvalidHeightTall(t *testing.T) {
+	if bmapBytes(uint(defaultBitWidth)) >= 2 {
+		t.Skip("test only valid for widths less than 16")
+	}
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
-	a := NewAMT(bs)
-	err := a.Set(ctx, 15, 0)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
+	err = a.Set(ctx, 15, 0)
 	require.NoError(t, err)
 
 	a.height = 2

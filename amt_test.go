@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"os"
 	"testing"
 	"time"
 
@@ -25,6 +26,17 @@ func init() {
 		val := cbg.CborInt(i)
 		numbers[i] = &val
 	}
+}
+
+func TestMain(m *testing.M) {
+	// Hack to test with multiple widths, without hassle.
+	for defaultBitWidth = 2; defaultBitWidth <= 18; defaultBitWidth++ {
+		fmt.Printf("WIDTH %d\n", defaultBitWidth)
+		if code := m.Run(); code != 0 {
+			os.Exit(code)
+		}
+	}
+	os.Exit(0)
 }
 
 type mockBlocks struct {
@@ -59,7 +71,8 @@ func (mb *mockBlocks) report(b *testing.B) {
 func TestBasicSetGet(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
 	assertSet(t, a, 2, "foo")
 	assertGet(ctx, t, a, 2, "foo")
@@ -84,7 +97,8 @@ func TestBasicSetGet(t *testing.T) {
 func TestRoundTrip(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 	emptyCid, err := a.Flush(ctx)
 	require.NoError(t, err)
 
@@ -98,44 +112,32 @@ func TestRoundTrip(t *testing.T) {
 	require.Equal(t, emptyCid, c)
 }
 
-func TestOutOfRange(t *testing.T) {
+func TestMaxRange(t *testing.T) {
 	ctx := context.Background()
 	bs := cbor.NewCborStore(newMockBlocks())
 
-	a := NewAMT(bs)
-
-	err := a.Set(ctx, 1<<63+4, "what is up 1")
-	if err == nil {
-		t.Fatal("should have failed to set value out of range")
-	}
-
-	err = a.Set(ctx, MaxIndex+1, "what is up 2")
-	if err == nil {
-		t.Fatal("should have failed to set value out of range")
-	}
-
-	err = a.Set(ctx, MaxIndex, "what is up 3")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if a.height != internal.MaxHeight {
-		t.Fatal("expected to be at the maximum height")
-	}
-
-	var out string
-	require.NoError(t, a.Get(ctx, MaxIndex, &out))
-	require.Equal(t, "what is up 3", out)
-
-	err = a.Get(ctx, MaxIndex+1, &out)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "out of range")
-
-	err = a.Delete(ctx, MaxIndex)
+	a, err := NewAMT(bs)
 	require.NoError(t, err)
 
-	err = a.Delete(ctx, MaxIndex+1)
+	err = a.Set(ctx, MaxIndex, "what is up 1")
+	require.NoError(t, err)
+
+	err = a.Set(ctx, MaxIndex+1, "what is up 2")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "out of range")
+}
+
+func TestMaxRange11(t *testing.T) {
+	ctx := context.Background()
+	bs := cbor.NewCborStore(newMockBlocks())
+
+	a, err := NewAMT(bs, UseTreeBitWidth(11))
+	require.NoError(t, err)
+
+	err = a.Set(ctx, MaxIndex, "what is up 1")
+	require.NoError(t, err)
+
+	err = a.Set(ctx, MaxIndex+1, "what is up 2")
+	require.Error(t, err)
 }
 
 func assertDelete(t *testing.T, r *Root, i uint64) {
@@ -196,7 +198,8 @@ func assertGet(ctx context.Context, t testing.TB, r *Root, i uint64, val string)
 func TestExpand(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
 	if err := a.Set(ctx, 2, "foo"); err != nil {
 		t.Fatal(err)
@@ -232,7 +235,8 @@ func TestExpand(t *testing.T) {
 func TestInsertABunch(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
 	num := uint64(5000)
 
@@ -273,7 +277,8 @@ func TestForEachWithoutFlush(t *testing.T) {
 		{8, 9, 64},
 		{64, 8, 9},
 	} {
-		amt := NewAMT(bs)
+		amt, err := NewAMT(bs)
+		require.NoError(t, err)
 		set1 := make(map[uint64]struct{})
 		set2 := make(map[uint64]struct{})
 		for _, val := range vals {
@@ -291,7 +296,7 @@ func TestForEachWithoutFlush(t *testing.T) {
 		assert.Equal(t, make(map[uint64]struct{}), set1)
 
 		// ensure it still works after flush
-		_, err := amt.Flush(ctx)
+		_, err = amt.Flush(ctx)
 		require.NoError(t, err)
 
 		amt.ForEach(ctx, func(u uint64, deferred *cbg.Deferred) error {
@@ -318,7 +323,8 @@ func TestChaos(t *testing.T) {
 	r := rand.New(rand.NewSource(seed))
 	t.Logf("seed: %d", seed)
 
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 	c, err := a.Flush(ctx)
 	assert.NoError(t, err)
 
@@ -393,7 +399,8 @@ func TestChaos(t *testing.T) {
 func TestInsertABunchWithDelete(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
 	num := 12000
 	originSet := make(map[uint64]bool, num)
@@ -466,7 +473,8 @@ func TestInsertABunchWithDelete(t *testing.T) {
 func TestDeleteFirstEntry(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
 	assertSet(t, a, 0, "cat")
 	assertSet(t, a, 27, "cat")
@@ -489,10 +497,11 @@ func TestDeleteFirstEntry(t *testing.T) {
 func TestDelete(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
 	// Check that deleting out of range of the current AMT fails as we expect it to
-	err := a.Delete(ctx, 200)
+	err = a.Delete(ctx, 200)
 	assert.EqualValues(t, &ErrNotFound{200}, err)
 
 	assertSet(t, a, 0, "cat")
@@ -532,7 +541,8 @@ func TestDelete(t *testing.T) {
 
 	assertCount(t, na, 1)
 
-	a2 := NewAMT(bs)
+	a2, err := NewAMT(bs)
+	require.NoError(t, err)
 	assertSet(t, a2, 24, "dog")
 
 	a2c, err := a2.Flush(ctx)
@@ -551,7 +561,8 @@ func TestDelete(t *testing.T) {
 func TestDeleteReduceHeight(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
 	assertSet(t, a, 1, "thing")
 
@@ -593,7 +604,8 @@ func BenchmarkAMTInsertBulk(b *testing.B) {
 	ctx := context.Background()
 
 	for i := 0; i < b.N; i++ {
-		a := NewAMT(bs)
+		a, err := NewAMT(bs)
+		require.NoError(b, err)
 
 		num := uint64(5000)
 
@@ -631,7 +643,8 @@ func BenchmarkAMTLoadAndInsert(b *testing.B) {
 
 	bs := cbor.NewCborStore(mock)
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(b, err)
 
 	c, err := a.Flush(ctx)
 	if err != nil {
@@ -657,7 +670,8 @@ func BenchmarkAMTLoadAndInsert(b *testing.B) {
 func TestForEach(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
 	r := rand.New(rand.NewSource(101))
 
@@ -711,7 +725,8 @@ func TestForEach(t *testing.T) {
 func TestForEachAt(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
 	r := rand.New(rand.NewSource(101))
 
@@ -773,10 +788,11 @@ func TestFirstSetIndex(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
 
-	vals := []uint64{0, 1, 5, internal.Width, internal.Width + 1, 276, 1234, 62881923}
+	vals := []uint64{0, 1, 5, 1 << uint64(defaultBitWidth), 1<<uint64(defaultBitWidth) + 1, 276, 1234, 62881923}
 	for i, v := range vals {
 		t.Log(i, v)
-		a := NewAMT(bs)
+		a, err := NewAMT(bs)
+		require.NoError(t, err)
 		if err := a.Set(ctx, v, fmt.Sprint(v)); err != nil {
 			t.Fatal(err)
 		}
@@ -818,7 +834,8 @@ func TestFirstSetIndex(t *testing.T) {
 func TestEmptyCIDStability(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
 	c1, err := a.Flush(ctx)
 	require.NoError(t, err)
@@ -849,7 +866,7 @@ func TestBadBitfield(t *testing.T) {
 	require.NoError(t, err)
 
 	var root internal.Root
-	root.Node.Bmap[0] = 0xff
+	root.Node.Bmap = []byte{0xff}
 	root.Node.Links = append(root.Node.Links, subnode)
 	root.Height = 10
 	root.Count = 10
@@ -876,7 +893,8 @@ func TestForEachSkip(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
 
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 	require.NoError(t, a.Set(ctx, 0, 0))
 	require.NoError(t, a.Set(ctx, 199, 0))
 	require.NoError(t, a.Set(ctx, 201, 0))
@@ -894,7 +912,8 @@ func TestForEachSkip(t *testing.T) {
 func TestBatch(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
 	require.NoError(t, a.BatchSet(ctx, numbers))
 	assertEquals(ctx, t, a, numbers)
