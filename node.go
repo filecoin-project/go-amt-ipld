@@ -362,6 +362,65 @@ func (n *node) flush(ctx context.Context, bs cbor.IpldStore, bitWidth uint, heig
 	return nd, nil
 }
 
+// checkSize computes the serialized size of the entire AMT.
+// It puts and gets blocks as necessary to do this.
+// This is an expensive operation and should only be used in testing and analysis.
+//
+// Precondition: the node has not been modified since flush. The dirty bits are
+// not checked and link cid when exists is assumed to be source of truth
+func (n *node) checkSize(ctx context.Context, bs cbor.IpldStore, bitWidth uint, height int) (uint64, error) {
+	// Get size of this node
+	nd := new(internal.Node)
+	nd.Bmap = make([]byte, bmapBytes(bitWidth))
+	if height == 0 {
+		for i, val := range n.values {
+			if val == nil {
+				continue
+			}
+			nd.Values = append(nd.Values, val)
+			nd.Bmap[i/8] |= 1 << (uint(i) % 8)
+		}
+	} else {
+		for i, ln := range n.links {
+			if ln == nil {
+				continue
+			}
+			// Precondition that no link cids are out of date applied here.
+			// For the current implementation this should not actually impact
+			// the final result as cids are all sized the same.
+			nd.Links = append(nd.Links, ln.cid)
+			nd.Bmap[i/8] |= 1 << (uint(1) % 8)
+		}
+	}
+	c, err := bs.Put(ctx, nd)
+	if err != nil {
+		return 0, err
+	}
+	var def cbg.Deferred
+	if err := bs.Get(ctx, c, &def); err != nil {
+		return 0, err
+	}
+	totsize := uint64(len(def.Raw))
+
+	// Recurse
+	for _, ln := range n.links {
+		if ln == nil {
+			continue
+		}
+		chnd, err := ln.load(ctx, bs, bitWidth, height)
+		if err != nil {
+			return 0, err
+		}
+		chsize, err := chnd.checkSize(ctx, bs, bitWidth, height-1)
+		if err != nil {
+			return 0, err
+		}
+		totsize += chsize
+
+	}
+	return totsize, nil
+}
+
 func (n *node) setLink(bitWidth uint, i uint64, l *link) {
 	if n.links == nil {
 		if l == nil {

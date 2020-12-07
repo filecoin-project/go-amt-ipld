@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
-	"os"
 	"testing"
 	"time"
 
@@ -28,29 +27,39 @@ func init() {
 	}
 }
 
-func TestMain(m *testing.M) {
-	// Hack to test with multiple widths, without hassle.
-	for defaultBitWidth = 2; defaultBitWidth <= 18; defaultBitWidth++ {
-		fmt.Printf("WIDTH %d\n", defaultBitWidth)
-		if code := m.Run(); code != 0 {
-			os.Exit(code)
-		}
-	}
-	os.Exit(0)
-}
+// func TestMain(m *testing.M) {
+// 	// Hack to test with multiple widths, without hassle.
+// 	for defaultBitWidth = 2; defaultBitWidth <= 18; defaultBitWidth++ {
+// 		fmt.Printf("WIDTH %d\n", defaultBitWidth)
+// 		if code := m.Run(); code != 0 {
+// 			os.Exit(code)
+// 		}
+// 	}
+// 	os.Exit(0)
+// }
 
 type mockBlocks struct {
-	data               map[cid.Cid]block.Block
-	getCount, putCount int
+	data  map[cid.Cid]block.Block
+	stats blockstoreStats
 }
 
 func newMockBlocks() *mockBlocks {
-	return &mockBlocks{make(map[cid.Cid]block.Block), 0, 0}
+	return &mockBlocks{make(map[cid.Cid]block.Block),
+		blockstoreStats{0, 0, 0, 0},
+	}
+}
+
+func (mb *mockBlocks) totalBlockSizes() int {
+	sum := 0
+	for _, v := range mb.data {
+		sum += len(v.RawData())
+	}
+	return sum
 }
 
 func (mb *mockBlocks) Get(c cid.Cid) (block.Block, error) {
+	mb.stats.evtcntGet++
 	d, ok := mb.data[c]
-	mb.getCount++
 	if ok {
 		return d, nil
 	}
@@ -58,14 +67,25 @@ func (mb *mockBlocks) Get(c cid.Cid) (block.Block, error) {
 }
 
 func (mb *mockBlocks) Put(b block.Block) error {
-	mb.putCount++
+	mb.stats.evtcntPut++
+	mb.stats.bytesPut += len(b.RawData())
+	if _, exists := mb.data[b.Cid()]; exists {
+		mb.stats.evtcntPutDup++
+	}
 	mb.data[b.Cid()] = b
 	return nil
 }
 
+type blockstoreStats struct {
+	evtcntGet    int
+	evtcntPut    int
+	bytesPut     int
+	evtcntPutDup int
+}
+
 func (mb *mockBlocks) report(b *testing.B) {
-	b.ReportMetric(float64(mb.getCount)/float64(b.N), "gets/op")
-	b.ReportMetric(float64(mb.putCount)/float64(b.N), "puts/op")
+	b.ReportMetric(float64(mb.stats.evtcntGet)/float64(b.N), "gets/op")
+	b.ReportMetric(float64(mb.stats.evtcntPut)/float64(b.N), "puts/op")
 }
 
 func TestBasicSetGet(t *testing.T) {
