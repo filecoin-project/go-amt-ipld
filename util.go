@@ -2,7 +2,7 @@ package amt
 
 import "math"
 
-// Given height 'height', how many nodes can a maximally full tree can we
+// Given height 'height', how many nodes in a maximally full tree can we
 // build? (bitWidth^2)^height = width^height. If we pass in height+1 we can work
 // out how many elements a maximally full tree can hold, width^(height+1).
 func nodesForHeight(bitWidth uint, height int) uint64 {

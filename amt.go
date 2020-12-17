@@ -195,10 +195,6 @@ func (r *Root) Set(ctx context.Context, i uint64, val interface{}) error {
 		if r.count >= (MaxIndex - 1) {
 			return errInvalidCount
 		}
-		// Count is only stored in the root and not validated as being correct,
-		// just incremented and decremented in _this implementation_ but may not
-		// necessarily reflect the state of the graph if generated from untrusted
-		// sources.
 		r.count++
 	}
 
@@ -274,9 +270,9 @@ func (r *Root) BatchDelete(ctx context.Context, indices []uint64) error {
 // (either because the AMT is larger than index or it's not set) an ErrNotFound
 // error is returned.
 //
-// Compaction will be performed if this delete leaves nodes with no remaining
-// elements leaving the AMT in canonical form for the given set of data that
-// it contains.
+// If this delete operation leaves nodes with no remaining elements, the height
+// will be reduced to fit the maximum remaining index, leaving the AMT in
+// canonical form for the given set of data that it contains.
 func (r *Root) Delete(ctx context.Context, i uint64) error {
 	if i > MaxIndex {
 		return fmt.Errorf("index %d is out of range for the amt", i)
@@ -317,7 +313,6 @@ func (r *Root) Delete(ctx context.Context, i uint64) error {
 		return errInvalidCount
 	}
 
-	// decrement count - advisory only in the root node!
 	r.count--
 	return nil
 }
@@ -369,10 +364,12 @@ func (r *Root) Flush(ctx context.Context) (cid.Cid, error) {
 	return r.store.Put(ctx, &root)
 }
 
-// Len returns the advisory "count" of this AMT. This is not strictly a secure
-// count of the number of elements, but is assumed correct unless the AMT
-// contains nodes produced by untrusted actors. A secure count would require the
-// full iteration of leaf nodes to count values.
+// Len returns the "Count" property that is stored in the root of this AMT.
+// It's correctness is only guaranteed by the consistency of the build of the
+// AMT (i.e. this code). A "secure" count would require iterating the entire
+// tree, but if all nodes are part of a trusted structure (e.g. one where we
+// control the entire build, or verify all incoming blocks from untrusted
+// sources) then we ought to be able to say "count" is correct.
 func (r *Root) Len() uint64 {
 	return r.count
 }

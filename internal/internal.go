@@ -51,8 +51,11 @@ type Node struct {
 // value-holding leaf nodes and therefore how many bits of an index will be
 // required for navigation.
 //
-// The count property is advisory. It is not essential to the construction or
-// navigation of the AMT but may be used as an indicator of its contents.
+// The count property is maintained during ongoing mutation of the AMT and can
+// be used as a fast indicator of the size of the structure. It is assumed to
+// be correct if the nodes of the AMT were part of a trusted construction or
+// have been verified. It is not essential to the construction or navigation of
+// the AMT but is helpful for fast Len() calls.
 // Performing a secure count would require navigating through all leaf nodes
 // and adding up the number of occupied slots.
 //
