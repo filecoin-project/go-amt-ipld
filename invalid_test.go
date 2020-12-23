@@ -25,7 +25,7 @@ func TestInvalidHeightSingle(t *testing.T) {
 	ctx := context.Background()
 	a, err := NewAMT(bs)
 	require.NoError(t, err)
-	err = a.Set(ctx, 0, 0)
+	err = a.Set(ctx, 0, cborstr(""))
 	require.NoError(t, err)
 
 	a.height = 1
@@ -43,7 +43,7 @@ func TestInvalidHeightTall(t *testing.T) {
 	ctx := context.Background()
 	a, err := NewAMT(bs)
 	require.NoError(t, err)
-	err = a.Set(ctx, 15, 0)
+	err = a.Set(ctx, 15, cborstr(""))
 	require.NoError(t, err)
 
 	a.height = 2
@@ -52,7 +52,7 @@ func TestInvalidHeightTall(t *testing.T) {
 	after, err := LoadAMT(ctx, bs, c)
 	require.NoError(t, err)
 
-	var out int
+	var out CborByteArray
 	err = after.Get(ctx, 31, &out)
 	require.Error(t, err)
 }

@@ -9,13 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/filecoin-project/go-amt-ipld/v3/internal"
 	block "github.com/ipfs/go-block-format"
 	cid "github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
 	assert "github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	cbg "github.com/whyrusleeping/cbor-gen"
+
+	"github.com/filecoin-project/go-amt-ipld/v3/internal"
 )
 
 var numbers []cbg.CBORMarshaler
@@ -119,10 +120,10 @@ func TestMaxRange(t *testing.T) {
 	a, err := NewAMT(bs)
 	require.NoError(t, err)
 
-	err = a.Set(ctx, MaxIndex, "what is up 1")
+	err = a.Set(ctx, MaxIndex, cborstr("what is up 1"))
 	require.NoError(t, err)
 
-	err = a.Set(ctx, MaxIndex+1, "what is up 2")
+	err = a.Set(ctx, MaxIndex+1, cborstr("what is up 2"))
 	require.Error(t, err)
 }
 
@@ -133,10 +134,10 @@ func TestMaxRange11(t *testing.T) {
 	a, err := NewAMT(bs, UseTreeBitWidth(11))
 	require.NoError(t, err)
 
-	err = a.Set(ctx, MaxIndex, "what is up 1")
+	err = a.Set(ctx, MaxIndex, cborstr("what is up 1"))
 	require.NoError(t, err)
 
-	err = a.Set(ctx, MaxIndex+1, "what is up 2")
+	err = a.Set(ctx, MaxIndex+1, cborstr("what is up 2"))
 	require.Error(t, err)
 }
 
@@ -169,7 +170,7 @@ func assertSet(t *testing.T, r *Root, i uint64, val string) {
 	ctx := context.Background()
 
 	t.Helper()
-	if err := r.Set(ctx, i, val); err != nil {
+	if err := r.Set(ctx, i, cborstr(val)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -185,12 +186,12 @@ func assertGet(ctx context.Context, t testing.TB, r *Root, i uint64, val string)
 
 	t.Helper()
 
-	var out string
+	var out CborByteArray
 	if err := r.Get(ctx, i, &out); err != nil {
 		t.Fatal(err)
 	}
 
-	if out != val {
+	if !bytes.Equal(out, *cborstr(val)) {
 		t.Fatal("value we got out didnt match expectation")
 	}
 }
@@ -201,17 +202,9 @@ func TestExpand(t *testing.T) {
 	a, err := NewAMT(bs)
 	require.NoError(t, err)
 
-	if err := a.Set(ctx, 2, "foo"); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := a.Set(ctx, 11, "bar"); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := a.Set(ctx, 79, "baz"); err != nil {
-		t.Fatal(err)
-	}
+	assertSet(t, a, 2, "foo")
+	assertSet(t, a, 11, "bar")
+	assertSet(t, a, 79, "baz")
 
 	assertGet(ctx, t, a, 2, "foo")
 	assertGet(ctx, t, a, 11, "bar")
@@ -241,9 +234,7 @@ func TestInsertABunch(t *testing.T) {
 	num := uint64(5000)
 
 	for i := uint64(0); i < num; i++ {
-		if err := a.Set(ctx, i, "foo foo bar"); err != nil {
-			t.Fatal(err)
-		}
+		assertSet(t, a, i, "foo foo bar")
 	}
 
 	for i := uint64(0); i < num; i++ {
@@ -282,7 +273,7 @@ func TestForEachWithoutFlush(t *testing.T) {
 		set1 := make(map[uint64]struct{})
 		set2 := make(map[uint64]struct{})
 		for _, val := range vals {
-			err := amt.Set(ctx, val, "")
+			err := amt.Set(ctx, val, cborstr(""))
 			require.NoError(t, err)
 
 			set1[val] = struct{}{}
@@ -348,7 +339,7 @@ func TestChaos(t *testing.T) {
 
 		for _, index := range o.idxs {
 			if !o.del {
-				err := a.Set(ctx, index, "test")
+				err := a.Set(ctx, index, cborstr("test"))
 				testMap[index] = struct{}{}
 				assert.NoError(t, err)
 			} else {
@@ -422,9 +413,7 @@ func TestInsertABunchWithDelete(t *testing.T) {
 
 	for i := uint64(0); i < uint64(num); i++ {
 		if originSet[i] {
-			if err := a.Set(ctx, i, "foo foo bar"); err != nil {
-				t.Fatal(err)
-			}
+			assertSet(t, a, i, "foo foo bar")
 		}
 	}
 
@@ -610,7 +599,7 @@ func BenchmarkAMTInsertBulk(b *testing.B) {
 		num := uint64(5000)
 
 		for i := uint64(0); i < num; i++ {
-			if err := a.Set(ctx, i, "foo foo bar"); err != nil {
+			if err := a.Set(ctx, i, cborstr("foo foo bar")); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -657,7 +646,7 @@ func BenchmarkAMTLoadAndInsert(b *testing.B) {
 			b.Fatal(err)
 		}
 
-		if err := na.Set(ctx, i, "some value"); err != nil {
+		if err := na.Set(ctx, i, cborstr("some value")); err != nil {
 			b.Fatal(err)
 		}
 		c, err = na.Flush(ctx)
@@ -683,7 +672,7 @@ func TestForEach(t *testing.T) {
 	}
 
 	for _, i := range indexes {
-		if err := a.Set(ctx, i, "value"); err != nil {
+		if err := a.Set(ctx, i, cborstr("value")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -738,7 +727,7 @@ func TestForEachAt(t *testing.T) {
 	}
 
 	for _, i := range indexes {
-		if err := a.Set(ctx, i, fmt.Sprint(i)); err != nil {
+		if err := a.Set(ctx, i, cborstr(fmt.Sprint(i))); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -793,7 +782,7 @@ func TestFirstSetIndex(t *testing.T) {
 		t.Log(i, v)
 		a, err := NewAMT(bs)
 		require.NoError(t, err)
-		if err := a.Set(ctx, v, fmt.Sprint(v)); err != nil {
+		if err := a.Set(ctx, v, cborstr(fmt.Sprint(v))); err != nil {
 			t.Fatal(err)
 		}
 
@@ -850,7 +839,7 @@ func TestEmptyCIDStability(t *testing.T) {
 	assert.Equal(t, c1, c2)
 
 	// adding and removing and item should not affect its cid
-	a.Set(ctx, 0, "")
+	a.Set(ctx, 0, cborstr(""))
 	a.Delete(ctx, 0)
 
 	c3, err := a.Flush(ctx)
@@ -895,12 +884,12 @@ func TestForEachSkip(t *testing.T) {
 
 	a, err := NewAMT(bs)
 	require.NoError(t, err)
-	require.NoError(t, a.Set(ctx, 0, 0))
-	require.NoError(t, a.Set(ctx, 199, 0))
-	require.NoError(t, a.Set(ctx, 201, 0))
-	require.NoError(t, a.Set(ctx, 10000, 0))
-	require.NoError(t, a.Set(ctx, 10001, 0))
-	require.NoError(t, a.Set(ctx, 11001, 0))
+	require.NoError(t, a.Set(ctx, 0, cborstr("")))
+	require.NoError(t, a.Set(ctx, 199, cborstr("")))
+	require.NoError(t, a.Set(ctx, 201, cborstr("")))
+	require.NoError(t, a.Set(ctx, 10000, cborstr("")))
+	require.NoError(t, a.Set(ctx, 10001, cborstr("")))
+	require.NoError(t, a.Set(ctx, 11001, cborstr("")))
 	var keys []uint64
 	require.NoError(t, a.ForEachAt(ctx, 200, func(i uint64, _ *cbg.Deferred) error {
 		keys = append(keys, i)

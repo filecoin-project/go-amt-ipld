@@ -6,10 +6,11 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/filecoin-project/go-amt-ipld/v3/internal"
 	"github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
 	cbg "github.com/whyrusleeping/cbor-gen"
+
+	"github.com/filecoin-project/go-amt-ipld/v3/internal"
 )
 
 // node is described in more detail in its internal serialized form,
@@ -186,7 +187,7 @@ func (nd *node) empty() bool {
 // assert that a value does not exist in this AMT if an expected intermediate
 // doesn't exist, so we don't need to do full height traversal for many cases
 // where we don't have that index.
-func (n *node) get(ctx context.Context, bs cbor.IpldStore, bitWidth uint, height int, i uint64, out interface{}) (bool, error) {
+func (n *node) get(ctx context.Context, bs cbor.IpldStore, bitWidth uint, height int, i uint64, out cbg.CBORUnmarshaler) (bool, error) {
 	// height=0 means we're operating on a leaf node where the entries themselves
 	// are stores, we have a `set` so it must exist if the node is correctly
 	// formed
@@ -195,10 +196,7 @@ func (n *node) get(ctx context.Context, bs cbor.IpldStore, bitWidth uint, height
 		if d == nil {
 			return false, nil
 		}
-		if um, ok := out.(cbg.CBORUnmarshaler); ok {
-			return true, um.UnmarshalCBOR(bytes.NewReader(d.Raw))
-		}
-		return true, cbor.DecodeInto(d.Raw, out)
+		return true, out.UnmarshalCBOR(bytes.NewReader(d.Raw))
 	}
 
 	// Non-leaf case where we need to navigate further down toward the correct
@@ -477,12 +475,12 @@ func (n *node) flush(ctx context.Context, bs cbor.IpldStore, bitWidth uint, heig
 			if err != nil {
 				return nil, err
 			}
-			cid, err := bs.Put(ctx, subn)
+			c, err := bs.Put(ctx, subn)
 			if err != nil {
 				return nil, err
 			}
 
-			ln.cid = cid
+			ln.cid = c
 			ln.dirty = false
 		}
 		nd.Links = append(nd.Links, ln.cid)
