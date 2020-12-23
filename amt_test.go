@@ -69,6 +69,39 @@ func (mb *mockBlocks) report(b *testing.B) {
 	b.ReportMetric(float64(mb.putCount)/float64(b.N), "puts/op")
 }
 
+func TestNew(t *testing.T) {
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
+
+	t.Run("default config", func(t *testing.T) {
+		a, err := NewAMT(bs)
+		require.NoError(t, err)
+		assert.Equal(t, defaultBitWidth, a.bitWidth)
+
+		c, err := FromArray(ctx, bs, numbers)
+		require.NoError(t, err)
+		as, err := LoadAMT(ctx, bs, c)
+		require.NoError(t, err)
+		assert.Equal(t, defaultBitWidth, as.bitWidth)
+	})
+
+	t.Run("explicit bitwidth", func(t *testing.T) {
+		a, err := NewAMT(bs, UseTreeBitWidth(4))
+		require.NoError(t, err)
+		assert.Equal(t, uint(4), a.bitWidth)
+
+		c, err := FromArray(ctx, bs, numbers, UseTreeBitWidth(4))
+		require.NoError(t, err)
+		if defaultBitWidth != uint(4) {
+			_, err = LoadAMT(ctx, bs, c) // Fails to load with implicit default bitwidth
+			assert.Error(t, err)
+		}
+		as, err := LoadAMT(ctx, bs, c, UseTreeBitWidth(4))
+		require.NoError(t, err)
+		assert.Equal(t, uint(4), as.bitWidth)
+	})
+}
+
 func TestBasicSetGet(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()

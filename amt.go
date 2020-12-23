@@ -114,7 +114,7 @@ func LoadAMT(ctx context.Context, bs cbor.IpldStore, c cid.Cid, opts ...Option) 
 // options provided. Indexes from the array are used as the indexes for the same
 // values in the AMT.
 func FromArray(ctx context.Context, bs cbor.IpldStore, vals []cbg.CBORMarshaler, opts ...Option) (cid.Cid, error) {
-	r, err := NewAMT(bs)
+	r, err := NewAMT(bs, opts...)
 	if err != nil {
 		return cid.Undef, err
 	}
