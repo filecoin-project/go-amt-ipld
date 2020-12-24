@@ -143,25 +143,20 @@ func FromArray(ctx context.Context, bs cbor.IpldStore, vals []cbg.CBORMarshaler,
 // Set operation for an index between 64 and 511 will require that the AMT have
 // a height of at least 3. Where an AMT has a height less than 3, additional
 // nodes will be added until the height is 3.
-func (r *Root) Set(ctx context.Context, i uint64, val interface{}) error {
+func (r *Root) Set(ctx context.Context, i uint64, val cbg.CBORMarshaler) error {
 	if i > MaxIndex {
 		return fmt.Errorf("index %d is out of range for the amt", i)
 	}
 
-	// serialize the value however we can
-	var b []byte
-	if m, ok := val.(cbg.CBORMarshaler); ok {
-		buf := new(bytes.Buffer)
-		if err := m.MarshalCBOR(buf); err != nil {
-			return err
-		}
-		b = buf.Bytes()
+	var d cbg.Deferred
+	if val == nil {
+		d.Raw = cbg.CborNull
 	} else {
-		var err error
-		b, err = cbor.DumpObject(val)
-		if err != nil {
+		valueBuf := new(bytes.Buffer)
+		if err := val.MarshalCBOR(valueBuf); err != nil {
 			return err
 		}
+		d.Raw = valueBuf.Bytes()
 	}
 
 	// where the index is greater than the number of elements we can fit into the
@@ -185,7 +180,7 @@ func (r *Root) Set(ctx context.Context, i uint64, val interface{}) error {
 		r.height++
 	}
 
-	addVal, err := r.node.set(ctx, r.store, r.bitWidth, int(r.height), i, &cbg.Deferred{Raw: b})
+	addVal, err := r.node.set(ctx, r.store, r.bitWidth, r.height, i, &d)
 	if err != nil {
 		return err
 	}
@@ -220,17 +215,17 @@ func (r *Root) BatchSet(ctx context.Context, vals []cbg.CBORMarshaler) error {
 // Get retrieves a value from index i and deserializes the value into the out
 // interface. Where a specified index does not exist in the AMT, an ErrNotFound
 // error is returned.
-func (r *Root) Get(ctx context.Context, i uint64, out interface{}) error {
+func (r *Root) Get(ctx context.Context, i uint64, out cbg.CBORUnmarshaler) error {
 	if i > MaxIndex {
 		return fmt.Errorf("index %d is out of range for the amt", i)
 	}
 
 	// easy shortcut case, index is too large for our height, don't bother looking
 	// further
-	if i >= nodesForHeight(r.bitWidth, int(r.height+1)) {
+	if i >= nodesForHeight(r.bitWidth, r.height+1) {
 		return &ErrNotFound{Index: i}
 	}
-	if found, err := r.node.get(ctx, r.store, r.bitWidth, int(r.height), i, out); err != nil {
+	if found, err := r.node.get(ctx, r.store, r.bitWidth, r.height, i, out); err != nil {
 		return err
 	} else if !found {
 		return &ErrNotFound{Index: i}
@@ -279,11 +274,11 @@ func (r *Root) Delete(ctx context.Context, i uint64) error {
 	}
 
 	// shortcut, index is greater than what we hold so we know it's not there
-	if i >= nodesForHeight(r.bitWidth, int(r.height+1)) {
+	if i >= nodesForHeight(r.bitWidth, r.height+1) {
 		return &ErrNotFound{i}
 	}
 
-	found, err := r.node.delete(ctx, r.store, r.bitWidth, int(r.height), i)
+	found, err := r.node.delete(ctx, r.store, r.bitWidth, r.height, i)
 	if err != nil {
 		return err
 	} else if !found {
