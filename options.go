@@ -4,7 +4,7 @@ import (
 	"fmt"
 )
 
-var defaultBitWidth = 3
+var defaultBitWidth = uint(3)
 
 type config struct {
 	bitWidth uint
@@ -12,18 +12,18 @@ type config struct {
 
 type Option func(*config) error
 
-func UseTreeBitWidth(bitWidth int) Option {
+func UseTreeBitWidth(bitWidth uint) Option {
 	return func(c *config) error {
 		if bitWidth < 1 {
 			return fmt.Errorf("bit width must be at least 2, is %d", bitWidth)
 		}
-		c.bitWidth = uint(bitWidth)
+		c.bitWidth = bitWidth
 		return nil
 	}
 }
 
 func defaultConfig() *config {
 	return &config{
-		bitWidth: uint(defaultBitWidth),
+		bitWidth: defaultBitWidth,
 	}
 }
