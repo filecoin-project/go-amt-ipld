@@ -53,6 +53,7 @@ func TestInvalidHeightTall(t *testing.T) {
 	require.NoError(t, err)
 
 	var out CborByteArray
-	err = after.Get(ctx, 31, &out)
-	require.Error(t, err)
+	found, err := after.Get(ctx, 31, &out)
+	require.NoError(t, err)
+	require.False(t, found)
 }

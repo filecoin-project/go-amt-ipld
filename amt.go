@@ -9,13 +9,10 @@ import (
 
 	cid "github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
-	logging "github.com/ipfs/go-log"
 	cbg "github.com/whyrusleeping/cbor-gen"
 
 	"github.com/filecoin-project/go-amt-ipld/v3/internal"
 )
-
-var log = logging.Logger("amt")
 
 // MaxIndex is the maximum index for elements in the AMT. This MaxUint64-1 so we
 // don't overflow MaxUint64 when computing the length.
@@ -212,36 +209,30 @@ func (r *Root) BatchSet(ctx context.Context, vals []cbg.CBORMarshaler) error {
 	return nil
 }
 
-// Get retrieves a value from index i and deserializes the value into the out
-// interface. Where a specified index does not exist in the AMT, an ErrNotFound
-// error is returned.
-func (r *Root) Get(ctx context.Context, i uint64, out cbg.CBORUnmarshaler) error {
+// Get retrieves a value from index i.
+// If the index is set, returns true and, if the `out` parameter is not nil,
+// deserializes the value into that interface. Returns false if the index is not set.
+func (r *Root) Get(ctx context.Context, i uint64, out cbg.CBORUnmarshaler) (bool, error) {
 	if i > MaxIndex {
-		return fmt.Errorf("index %d is out of range for the amt", i)
+		return false, fmt.Errorf("index %d is out of range for the amt", i)
 	}
 
 	// easy shortcut case, index is too large for our height, don't bother looking
 	// further
 	if i >= nodesForHeight(r.bitWidth, r.height+1) {
-		return &ErrNotFound{Index: i}
+		return false, nil
 	}
-	if found, err := r.node.get(ctx, r.store, r.bitWidth, r.height, i, out); err != nil {
-		return err
-	} else if !found {
-		return &ErrNotFound{Index: i}
-	}
-	return nil
+	return r.node.get(ctx, r.store, r.bitWidth, r.height, i, out)
 }
 
 // BatchDelete performs a bulk Delete operation on an array of indices. Each
-// index in the given indices array will be removed from the AMT. Where an
-// index does not exist in the AMT, the batch operation will be halted and an
-// ErrNotFound error returned. This operation is not atomic and an ErrNotFound
-// may result in only some of the indices removed from the AMT.
+// index in the given indices array will be removed from the AMT, if it is present.
+//
+// Returns true if the AMT was modified as a result of this operation.
 //
 // There is no special optimization applied to this method, it is simply a
 // convenience wrapper around Delete for an array of indices.
-func (r *Root) BatchDelete(ctx context.Context, indices []uint64) error {
+func (r *Root) BatchDelete(ctx context.Context, indices []uint64) (modified bool, err error) {
 	// TODO: theres a faster way of doing this, but this works for now
 
 	// Sort by index so we can safely implement these optimizations in the future.
@@ -253,36 +244,37 @@ func (r *Root) BatchDelete(ctx context.Context, indices []uint64) error {
 	}
 
 	for _, i := range indices {
-		if err := r.Delete(ctx, i); err != nil {
-			return err
+		found, err := r.Delete(ctx, i)
+		if err != nil {
+			return false, err
 		}
+		modified = modified || found
 	}
-
-	return nil
+	return modified, nil
 }
 
-// Delete removes an index from the AMT. If the index isn't present in the AMT
-// (either because the AMT is larger than index or it's not set) an ErrNotFound
-// error is returned.
+// Delete removes an index from the AMT.
+// Returns true if the index was present and removed, or false if the index
+// was not set.
 //
 // If this delete operation leaves nodes with no remaining elements, the height
 // will be reduced to fit the maximum remaining index, leaving the AMT in
 // canonical form for the given set of data that it contains.
-func (r *Root) Delete(ctx context.Context, i uint64) error {
+func (r *Root) Delete(ctx context.Context, i uint64) (bool, error) {
 	if i > MaxIndex {
-		return fmt.Errorf("index %d is out of range for the amt", i)
+		return false, fmt.Errorf("index %d is out of range for the amt", i)
 	}
 
 	// shortcut, index is greater than what we hold so we know it's not there
 	if i >= nodesForHeight(r.bitWidth, r.height+1) {
-		return &ErrNotFound{i}
+		return false, nil
 	}
 
 	found, err := r.node.delete(ctx, r.store, r.bitWidth, r.height, i)
 	if err != nil {
-		return err
+		return false, err
 	} else if !found {
-		return &ErrNotFound{i}
+		return false, nil
 	}
 
 	// The AMT invariant dictates that for any non-empty AMT, the root node must
@@ -298,29 +290,33 @@ func (r *Root) Delete(ctx context.Context, i uint64) error {
 	// See node.collapse() for more notes.
 	newHeight, err := r.node.collapse(ctx, r.store, r.bitWidth, r.height)
 	if err != nil {
-		return err
+		return false, err
 	}
 	r.height = newHeight
 
 	// Something is very wrong but there's not much we can do. So we perform
 	// the operation and then tell the user that something is wrong.
 	if r.count == 0 {
-		return errInvalidCount
+		return false, errInvalidCount
 	}
 
 	r.count--
-	return nil
+	return true, nil
 }
 
-// Subtract removes all elements of 'or' from this AMT. Uses a ForEach
-// operation on the passed AMT to perform a deletion on this AMT. This method
-// is a convenience and does not perform any internal optimizations for a
-// batch.
-func (r *Root) Subtract(ctx context.Context, or *Root) error {
+// Subtract removes all elements of 'or' from this AMT.
+//
+// Returns true if the AMT was modified as a result of this operation.
+// Uses a ForEach operation on the passed AMT to perform a deletion on this AMT.
+// This method is a convenience and does not perform any internal optimizations for a batch.
+func (r *Root) Subtract(ctx context.Context, or *Root) (changed bool, err error) {
 	// TODO: as with other methods, there should be an optimized way of doing this
-	return or.ForEach(ctx, func(i uint64, _ *cbg.Deferred) error {
-		return r.Delete(ctx, i)
+	err = or.ForEach(ctx, func(i uint64, _ *cbg.Deferred) error {
+		found, err := r.Delete(ctx, i)
+		changed = changed || found
+		return err
 	})
+	return
 }
 
 // ForEach iterates over the entire AMT and calls the cb function for each
@@ -367,19 +363,4 @@ func (r *Root) Flush(ctx context.Context) (cid.Cid, error) {
 // sources) then we ought to be able to say "count" is correct.
 func (r *Root) Len() uint64 {
 	return r.count
-}
-
-// ErrNotFound is used to indicate the non-existence of an entry on retrieval
-// operations.
-type ErrNotFound struct {
-	Index uint64
-}
-
-func (e ErrNotFound) Error() string {
-	return fmt.Sprintf("Index %d not found in AMT", e.Index)
-}
-
-// NotFound can be used for type checking this error type.
-func (e ErrNotFound) NotFound() bool {
-	return true
 }

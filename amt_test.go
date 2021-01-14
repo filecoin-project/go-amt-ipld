@@ -178,25 +178,13 @@ func assertDelete(t *testing.T, r *Root, i uint64) {
 	ctx := context.Background()
 
 	t.Helper()
-	if err := r.Delete(ctx, i); err != nil {
-		t.Fatal(err)
-	}
+	found, err := r.Delete(ctx, i)
+	require.NoError(t, err)
+	require.True(t, found)
 
-	err := r.Get(ctx, i, nil)
-	if err == nil {
-		t.Fatal("expected an error")
-	}
-	enf, ok := err.(*ErrNotFound)
-	if !ok {
-		t.Fatal("got wrong error: ", err)
-	}
-
-	_ = enf
-	/* TODO: do the errors better so this passes
-	if enf.Index != i {
-		t.Fatal("got error not found with wrong index?", enf)
-	}
-	*/
+	found, err = r.Get(ctx, i, nil)
+	require.NoError(t, err)
+	require.False(t, found)
 }
 
 func assertSet(t *testing.T, r *Root, i uint64, val string) {
@@ -219,10 +207,14 @@ func assertGet(ctx context.Context, t testing.TB, r *Root, i uint64, val string)
 
 	t.Helper()
 
+	found, err := r.Get(ctx, i, nil)
+	require.NoError(t, err)
+	require.True(t, found)
+
 	var out CborByteArray
-	if err := r.Get(ctx, i, &out); err != nil {
-		t.Fatal(err)
-	}
+	found, err = r.Get(ctx, i, &out)
+	require.NoError(t, err)
+	require.True(t, found)
 
 	if !bytes.Equal(out, *cborstr(val)) {
 		t.Fatal("value we got out didnt match expectation")
@@ -376,15 +368,10 @@ func TestChaos(t *testing.T) {
 				testMap[index] = struct{}{}
 				assert.NoError(t, err)
 			} else {
-				err := a.Delete(ctx, index)
+				_, err := a.Delete(ctx, index)
 				delete(testMap, index)
-				if err != nil {
-					if _, ok := err.(*ErrNotFound); !ok {
-						assert.NoError(t, err)
-					}
-				}
+				require.NoError(t, err)
 			}
-
 		}
 
 		fail := false
@@ -522,9 +509,10 @@ func TestDelete(t *testing.T) {
 	a, err := NewAMT(bs)
 	require.NoError(t, err)
 
-	// Check that deleting out of range of the current AMT fails as we expect it to
-	err = a.Delete(ctx, 200)
-	assert.EqualValues(t, &ErrNotFound{200}, err)
+	// Check that deleting out of range of the current AMT returns not found
+	found, err := a.Delete(ctx, 200)
+	require.NoError(t, err)
+	require.False(t, found)
 
 	assertSet(t, a, 0, "cat")
 	assertSet(t, a, 1, "cat")
@@ -846,8 +834,9 @@ func TestFirstSetIndex(t *testing.T) {
 		if fsi != v {
 			t.Fatal("got wrong index out after serialization")
 		}
-		err = after.Delete(ctx, v)
+		found, err := after.Delete(ctx, v)
 		require.NoError(t, err)
+		require.True(t, found)
 		fsi, err = after.FirstSetIndex(ctx)
 		require.Error(t, err)
 	}
@@ -951,7 +940,9 @@ func TestBatch(t *testing.T) {
 	}
 
 	assertEquals(ctx, t, clean, numbers)
-	require.NoError(t, a.BatchDelete(ctx, []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}))
+	modified, err := a.BatchDelete(ctx, []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9})
+	require.NoError(t, err)
+	require.True(t, modified)
 	assertCount(t, a, 0)
 }
 
