@@ -227,12 +227,14 @@ func (r *Root) Get(ctx context.Context, i uint64, out cbg.CBORUnmarshaler) (bool
 
 // BatchDelete performs a bulk Delete operation on an array of indices. Each
 // index in the given indices array will be removed from the AMT, if it is present.
+// If `strict` is true, all indices are expected to be present, and this will return an error
+// if one is not found.
 //
 // Returns true if the AMT was modified as a result of this operation.
 //
 // There is no special optimization applied to this method, it is simply a
 // convenience wrapper around Delete for an array of indices.
-func (r *Root) BatchDelete(ctx context.Context, indices []uint64) (modified bool, err error) {
+func (r *Root) BatchDelete(ctx context.Context, indices []uint64, strict bool) (modified bool, err error) {
 	// TODO: theres a faster way of doing this, but this works for now
 
 	// Sort by index so we can safely implement these optimizations in the future.
@@ -247,6 +249,8 @@ func (r *Root) BatchDelete(ctx context.Context, indices []uint64) (modified bool
 		found, err := r.Delete(ctx, i)
 		if err != nil {
 			return false, err
+		} else if strict && !found {
+			return false, fmt.Errorf("no such index %d", i)
 		}
 		modified = modified || found
 	}
@@ -302,21 +306,6 @@ func (r *Root) Delete(ctx context.Context, i uint64) (bool, error) {
 
 	r.count--
 	return true, nil
-}
-
-// Subtract removes all elements of 'or' from this AMT.
-//
-// Returns true if the AMT was modified as a result of this operation.
-// Uses a ForEach operation on the passed AMT to perform a deletion on this AMT.
-// This method is a convenience and does not perform any internal optimizations for a batch.
-func (r *Root) Subtract(ctx context.Context, or *Root) (changed bool, err error) {
-	// TODO: as with other methods, there should be an optimized way of doing this
-	err = or.ForEach(ctx, func(i uint64, _ *cbg.Deferred) error {
-		found, err := r.Delete(ctx, i)
-		changed = changed || found
-		return err
-	})
-	return
 }
 
 // ForEach iterates over the entire AMT and calls the cb function for each
