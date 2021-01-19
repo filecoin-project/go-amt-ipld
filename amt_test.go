@@ -178,25 +178,13 @@ func assertDelete(t *testing.T, r *Root, i uint64) {
 	ctx := context.Background()
 
 	t.Helper()
-	if err := r.Delete(ctx, i); err != nil {
-		t.Fatal(err)
-	}
+	found, err := r.Delete(ctx, i)
+	require.NoError(t, err)
+	require.True(t, found)
 
-	err := r.Get(ctx, i, nil)
-	if err == nil {
-		t.Fatal("expected an error")
-	}
-	enf, ok := err.(*ErrNotFound)
-	if !ok {
-		t.Fatal("got wrong error: ", err)
-	}
-
-	_ = enf
-	/* TODO: do the errors better so this passes
-	if enf.Index != i {
-		t.Fatal("got error not found with wrong index?", enf)
-	}
-	*/
+	found, err = r.Get(ctx, i, nil)
+	require.NoError(t, err)
+	require.False(t, found)
 }
 
 func assertSet(t *testing.T, r *Root, i uint64, val string) {
@@ -210,19 +198,19 @@ func assertSet(t *testing.T, r *Root, i uint64, val string) {
 
 func assertCount(t testing.TB, r *Root, c uint64) {
 	t.Helper()
-	if r.count != c {
-		t.Fatal("count is wrong")
-	}
+	require.Equal(t, c, r.count)
 }
 
 func assertGet(ctx context.Context, t testing.TB, r *Root, i uint64, val string) {
-
 	t.Helper()
+	found, err := r.Get(ctx, i, nil)
+	require.NoError(t, err)
+	require.True(t, found)
 
 	var out CborByteArray
-	if err := r.Get(ctx, i, &out); err != nil {
-		t.Fatal(err)
-	}
+	found, err = r.Get(ctx, i, &out)
+	require.NoError(t, err)
+	require.True(t, found)
 
 	if !bytes.Equal(out, *cborstr(val)) {
 		t.Fatal("value we got out didnt match expectation")
@@ -376,15 +364,10 @@ func TestChaos(t *testing.T) {
 				testMap[index] = struct{}{}
 				assert.NoError(t, err)
 			} else {
-				err := a.Delete(ctx, index)
+				_, err := a.Delete(ctx, index)
 				delete(testMap, index)
-				if err != nil {
-					if _, ok := err.(*ErrNotFound); !ok {
-						assert.NoError(t, err)
-					}
-				}
+				require.NoError(t, err)
 			}
-
 		}
 
 		fail := false
@@ -522,9 +505,10 @@ func TestDelete(t *testing.T) {
 	a, err := NewAMT(bs)
 	require.NoError(t, err)
 
-	// Check that deleting out of range of the current AMT fails as we expect it to
-	err = a.Delete(ctx, 200)
-	assert.EqualValues(t, &ErrNotFound{200}, err)
+	// Check that deleting out of range of the current AMT returns not found
+	found, err := a.Delete(ctx, 200)
+	require.NoError(t, err)
+	require.False(t, found)
 
 	assertSet(t, a, 0, "cat")
 	assertSet(t, a, 1, "cat")
@@ -846,8 +830,9 @@ func TestFirstSetIndex(t *testing.T) {
 		if fsi != v {
 			t.Fatal("got wrong index out after serialization")
 		}
-		err = after.Delete(ctx, v)
+		found, err := after.Delete(ctx, v)
 		require.NoError(t, err)
+		require.True(t, found)
 		fsi, err = after.FirstSetIndex(ctx)
 		require.Error(t, err)
 	}
@@ -941,26 +926,95 @@ func TestBatch(t *testing.T) {
 	assertEquals(ctx, t, a, numbers)
 
 	c, err := a.Flush(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
-	clean, err := LoadAMT(ctx, bs, c)
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Run("with strict, error if a key is missing", func(t *testing.T) {
+		clean, err := LoadAMT(ctx, bs, c)
+		require.NoError(t, err)
+		assertEquals(ctx, t, clean, numbers)
 
-	assertEquals(ctx, t, clean, numbers)
-	require.NoError(t, a.BatchDelete(ctx, []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}))
-	assertCount(t, a, 0)
+		_, err = clean.BatchDelete(ctx, []uint64{100}, true)
+		require.Error(t, err)
+	})
+	t.Run("with strict, delete no keys ok", func(t *testing.T) {
+		clean, err := LoadAMT(ctx, bs, c)
+		require.NoError(t, err)
+		assertEquals(ctx, t, clean, numbers)
+
+		mod, err := clean.BatchDelete(ctx, []uint64{}, true)
+		require.NoError(t, err)
+		assert.False(t, mod)
+		assertEquals(ctx, t, clean, numbers)
+	})
+	t.Run("with strict, delete some but not all keys ok", func(t *testing.T) {
+		clean, err := LoadAMT(ctx, bs, c)
+		require.NoError(t, err)
+		assertEquals(ctx, t, clean, numbers)
+
+		mod, err := clean.BatchDelete(ctx, []uint64{0, 1, 2, 3}, true)
+		require.NoError(t, err)
+		assert.True(t, mod)
+		assertEquals(ctx, t, clean, numbers[4:])
+	})
+	t.Run("with strict, error to delete some keys with one missing", func(t *testing.T) {
+		clean, err := LoadAMT(ctx, bs, c)
+		require.NoError(t, err)
+		assertEquals(ctx, t, clean, numbers)
+
+		_, err = clean.BatchDelete(ctx, []uint64{0, 1, 2, 3, 100}, true)
+		require.Error(t, err)
+	})
+	t.Run("with strict, delete all keys ok", func(t *testing.T) {
+		clean, err := LoadAMT(ctx, bs, c)
+		require.NoError(t, err)
+		assertEquals(ctx, t, clean, numbers)
+
+		mod, err := clean.BatchDelete(ctx, []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, true)
+		require.NoError(t, err)
+		assert.True(t, mod)
+		assertEquals(ctx, t, clean, []cbg.CBORMarshaler{})
+	})
+	t.Run("without strict, delete only absent keys ok", func(t *testing.T) {
+		clean, err := LoadAMT(ctx, bs, c)
+		require.NoError(t, err)
+		assertEquals(ctx, t, clean, numbers)
+
+		mod, err := clean.BatchDelete(ctx, []uint64{100, 101}, false)
+		require.NoError(t, err)
+		assert.False(t, mod)
+		assertEquals(ctx, t, clean, numbers)
+	})
+	t.Run("without strict, delete some keys ok", func(t *testing.T) {
+		clean, err := LoadAMT(ctx, bs, c)
+		require.NoError(t, err)
+		assertEquals(ctx, t, clean, numbers)
+
+		mod, err := clean.BatchDelete(ctx, []uint64{0, 1, 2, 3, 100, 101}, false)
+		require.NoError(t, err)
+		assert.True(t, mod)
+		assertEquals(ctx, t, clean, numbers[4:])
+	})
+	t.Run("without strict, delete all keys ok", func(t *testing.T) {
+		clean, err := LoadAMT(ctx, bs, c)
+		require.NoError(t, err)
+		assertEquals(ctx, t, clean, numbers)
+
+		mod, err := clean.BatchDelete(ctx, []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, false)
+		require.NoError(t, err)
+		assert.True(t, mod)
+		assertEquals(ctx, t, clean, []cbg.CBORMarshaler{})
+	})
 }
 
-func assertEquals(ctx context.Context, t testing.TB, a *Root, values []cbg.CBORMarshaler) {
-	require.NoError(t, a.ForEach(ctx, func(i uint64, val *cbg.Deferred) error {
+func assertEquals(ctx context.Context, t testing.TB, a *Root, expected []cbg.CBORMarshaler) {
+	// Note: the AMT is not necessarily indexed from zero, so indexes may not align.
+	expIndex := 0
+	require.NoError(t, a.ForEach(ctx, func(amtIdx uint64, val *cbg.Deferred) error {
 		var buf bytes.Buffer
-		require.NoError(t, values[i].MarshalCBOR(&buf))
-		require.Equal(t, buf.Bytes(), val.Raw)
+		require.NoError(t, expected[expIndex].MarshalCBOR(&buf))
+		require.Equal(t, val.Raw, buf.Bytes(), "AMT index %d, expectation index %d", amtIdx, expIndex)
+		expIndex++
 		return nil
 	}))
-	assertCount(t, a, uint64(len(values)))
+	assertCount(t, a, uint64(len(expected)))
 }

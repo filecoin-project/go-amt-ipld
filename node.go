@@ -193,10 +193,12 @@ func (n *node) get(ctx context.Context, bs cbor.IpldStore, bitWidth uint, height
 	// formed
 	if height == 0 {
 		d := n.getValue(i)
-		if d == nil {
-			return false, nil
+		found := d != nil
+		var err error
+		if found && out != nil {
+			err = out.UnmarshalCBOR(bytes.NewReader(d.Raw))
 		}
-		return true, out.UnmarshalCBOR(bytes.NewReader(d.Raw))
+		return found, err
 	}
 
 	// Non-leaf case where we need to navigate further down toward the correct
