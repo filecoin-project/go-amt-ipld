@@ -100,6 +100,19 @@ func TestNew(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, uint(4), as.bitWidth)
 	})
+
+	t.Run("minimum bitwidth", func(t *testing.T) {
+		_, err := NewAMT(bs, UseTreeBitWidth(1))
+		require.Error(t, err, "bit width must be at least 2, is 1")
+
+		_, err = FromArray(ctx, bs, numbers, UseTreeBitWidth(1))
+		require.Error(t, err, "bit width must be at least 2, is 1")
+
+		c, err := FromArray(ctx, bs, numbers, UseTreeBitWidth(4))
+		require.NoError(t, err)
+		_, err = LoadAMT(ctx, bs, c, UseTreeBitWidth(1))
+		require.Error(t, err, "bit width must be at least 2, is 1")
+	})
 }
 
 func TestBasicSetGet(t *testing.T) {

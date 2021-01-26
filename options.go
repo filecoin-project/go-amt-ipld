@@ -12,9 +12,10 @@ type config struct {
 
 type Option func(*config) error
 
+// UseTreeBitWidth sets the tree bit width option. Minimum 2.
 func UseTreeBitWidth(bitWidth uint) Option {
 	return func(c *config) error {
-		if bitWidth < 1 {
+		if bitWidth < 2 {
 			return fmt.Errorf("bit width must be at least 2, is %d", bitWidth)
 		}
 		c.bitWidth = bitWidth
