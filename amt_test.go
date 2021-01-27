@@ -1006,6 +1006,93 @@ func TestBatch(t *testing.T) {
 	})
 }
 
+func TestSetOrderIndependent(t *testing.T) {
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
+
+	nKeys := 8 * 8 * 8
+
+	for i := 0; i < nKeys; i++ {
+		assertSet(t, a, uint64(i), "foo")
+	}
+
+	c, err := a.Flush(ctx)
+	require.NoError(t, err)
+
+	vals := make([]int, 100)
+
+	for i := range vals {
+		vals[i] = rand.Intn(nKeys)
+	}
+
+	res := map[cid.Cid]struct{}{}
+	for i := 0; i < 20; i++ {
+		a, err := LoadAMT(ctx, bs, c)
+		require.NoError(t, err)
+
+		rand.Shuffle(len(vals), func(i, j int) {
+			vals[i], vals[j] = vals[j], vals[i]
+		})
+
+		for _, k := range vals {
+			assertSet(t, a, uint64(k), "foo2")
+		}
+
+		c, err := a.Flush(ctx)
+		require.NoError(t, err)
+		res[c] = struct{}{}
+	}
+
+	require.Len(t, res, 1)
+}
+
+func TestDeleteOrderIndependent(t *testing.T) {
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
+
+	nKeys := 8 * 8 * 8 * 8
+
+	for i := 0; i < nKeys; i++ {
+		assertSet(t, a, uint64(i), "foo")
+	}
+
+	c, err := a.Flush(ctx)
+	require.NoError(t, err)
+
+	mvals := map[int]struct{}{}
+	for i := 0; i < 100; i++ {
+		mvals[rand.Intn(nKeys)] = struct{}{}
+	}
+	vals := make([]int, 0, len(mvals))
+	for v := range mvals {
+		vals = append(vals, v)
+	}
+
+	res := map[cid.Cid]struct{}{}
+	for i := 0; i < 20; i++ {
+		a, err := LoadAMT(ctx, bs, c)
+		require.NoError(t, err)
+
+		rand.Shuffle(len(vals), func(i, j int) {
+			vals[i], vals[j] = vals[j], vals[i]
+		})
+
+		for _, k := range vals {
+			assertDelete(t, a, uint64(k))
+		}
+
+		c, err := a.Flush(ctx)
+		require.NoError(t, err)
+		res[c] = struct{}{}
+	}
+
+	require.Len(t, res, 1)
+}
+
 func assertEquals(ctx context.Context, t testing.TB, a *Root, expected []cbg.CBORMarshaler) {
 	// Note: the AMT is not necessarily indexed from zero, so indexes may not align.
 	expIndex := 0
