@@ -4,66 +4,73 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"math/bits"
+	"sort"
 
 	cid "github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
 	logging "github.com/ipfs/go-log"
 	cbg "github.com/whyrusleeping/cbor-gen"
+
+	"github.com/filecoin-project/go-amt-ipld/v3/internal"
 )
 
 var log = logging.Logger("amt")
 
-const (
-	// Width must be a power of 2. We set this to 8.
-	maxIndexBits = 63
-	widthBits    = 3
-	width        = 1 << widthBits             // 8
-	bitfieldSize = 1                          // ((width - 1) >> 3) + 1
-	maxHeight    = maxIndexBits/widthBits - 1 // 20 (because the root is at height 0).
-)
-
 // MaxIndex is the maximum index for elements in the AMT. This is currently 1^63
 // (max int) because the width is 8. That means every "level" consumes 3 bits
 // from the index, and 63/3 is a nice even 21
-const MaxIndex = uint64(1<<maxIndexBits) - 1
+const MaxIndex = uint64(1<<internal.MaxIndexBits) - 1
 
 type Root struct {
-	Height uint64
-	Count  uint64
-	Node   Node
+	height int
+	count  uint64
+
+	node *node
 
 	store cbor.IpldStore
-}
-
-type Node struct {
-	Bmap   [bitfieldSize]byte
-	Links  []cid.Cid
-	Values []*cbg.Deferred
-
-	expLinks []cid.Cid
-	expVals  []*cbg.Deferred
-	cache    []*Node
 }
 
 func NewAMT(bs cbor.IpldStore) *Root {
 	return &Root{
 		store: bs,
+		node:  new(node),
 	}
 }
 
 func LoadAMT(ctx context.Context, bs cbor.IpldStore, c cid.Cid) (*Root, error) {
-	var r Root
+	var r internal.Root
 	if err := bs.Get(ctx, c, &r); err != nil {
 		return nil, err
 	}
-	if r.Height > maxHeight {
-		return nil, fmt.Errorf("failed to load AMT: height out of bounds: %d > %d", r.Height, maxHeight)
+	if r.Height > internal.MaxHeight {
+		return nil, fmt.Errorf("failed to load AMT: height out of bounds: %d > %d", r.Height, internal.MaxHeight)
+	}
+	if nodesForHeight(int(r.Height+1)) < r.Count {
+		return nil, fmt.Errorf(
+			"failed to load AMT: not tall enough (%d) for count (%d)", r.Height, r.Count,
+		)
 	}
 
-	r.store = bs
+	nd, err := newNode(r.Node, r.Height == 0, r.Height == 0)
+	if err != nil {
+		return nil, err
+	}
 
-	return &r, nil
+	return &Root{
+		height: int(r.Height),
+		count:  r.Count,
+		node:   nd,
+		store:  bs,
+	}, nil
+}
+
+func FromArray(ctx context.Context, bs cbor.IpldStore, vals []cbg.CBORMarshaler) (cid.Cid, error) {
+	r := NewAMT(bs)
+	if err := r.BatchSet(ctx, vals); err != nil {
+		return cid.Undef, err
+	}
+
+	return r.Flush(ctx)
 }
 
 func (r *Root) Set(ctx context.Context, i uint64, val interface{}) error {
@@ -86,44 +93,35 @@ func (r *Root) Set(ctx context.Context, i uint64, val interface{}) error {
 		}
 	}
 
-	for i >= nodesForHeight(int(r.Height)+1) {
-		if !r.Node.empty() {
-			if err := r.Node.Flush(ctx, r.store, int(r.Height)); err != nil {
-				return err
-			}
-
-			c, err := r.store.Put(ctx, &r.Node)
-			if err != nil {
-				return err
-			}
-
-			r.Node = Node{
-				Bmap:  [...]byte{0x01},
-				Links: []cid.Cid{c},
+	for i >= nodesForHeight(r.height+1) {
+		if !r.node.empty() {
+			nd := r.node
+			r.node = &node{
+				links: [internal.Width]*link{
+					0: {
+						dirty:  true,
+						cached: nd,
+					},
+				},
 			}
 		}
-		r.Height++
+		r.height++
 	}
 
-	addVal, err := r.Node.set(ctx, r.store, int(r.Height), i, &cbg.Deferred{Raw: b})
+	addVal, err := r.node.set(ctx, r.store, int(r.height), i, &cbg.Deferred{Raw: b})
 	if err != nil {
 		return err
 	}
 
 	if addVal {
-		r.Count++
+		// Something is wrong, so we'll just do our best to not overflow.
+		if r.count >= (MaxIndex - 1) {
+			return errInvalidCount
+		}
+		r.count++
 	}
 
 	return nil
-}
-
-func FromArray(ctx context.Context, bs cbor.IpldStore, vals []cbg.CBORMarshaler) (cid.Cid, error) {
-	r := NewAMT(bs)
-	if err := r.BatchSet(ctx, vals); err != nil {
-		return cid.Undef, err
-	}
-
-	return r.Flush(ctx)
 }
 
 func (r *Root) BatchSet(ctx context.Context, vals []cbg.CBORMarshaler) error {
@@ -141,40 +139,28 @@ func (r *Root) Get(ctx context.Context, i uint64, out interface{}) error {
 		return fmt.Errorf("index %d is out of range for the amt", i)
 	}
 
-	if i >= nodesForHeight(int(r.Height+1)) {
+	if i >= nodesForHeight(int(r.height+1)) {
 		return &ErrNotFound{Index: i}
 	}
-	return r.Node.get(ctx, r.store, int(r.Height), i, out)
-}
-
-func (n *Node) get(ctx context.Context, bs cbor.IpldStore, height int, i uint64, out interface{}) error {
-	subi := i / nodesForHeight(height)
-	set, _ := n.getBit(subi)
-	if !set {
-		return &ErrNotFound{i}
-	}
-	if height == 0 {
-		n.expandValues()
-
-		d := n.expVals[i]
-
-		if um, ok := out.(cbg.CBORUnmarshaler); ok {
-			return um.UnmarshalCBOR(bytes.NewReader(d.Raw))
-		} else {
-			return cbor.DecodeInto(d.Raw, out)
-		}
-	}
-
-	subn, err := n.loadNode(ctx, bs, subi, false)
-	if err != nil {
+	if found, err := r.node.get(ctx, r.store, int(r.height), i, out); err != nil {
 		return err
+	} else if !found {
+		return &ErrNotFound{Index: i}
 	}
-
-	return subn.get(ctx, bs, height-1, i%nodesForHeight(height), out)
+	return nil
 }
 
 func (r *Root) BatchDelete(ctx context.Context, indices []uint64) error {
 	// TODO: theres a faster way of doing this, but this works for now
+
+	// Sort by index so we can safely implement these optimizations in the future.
+	less := func(i, j int) bool { return indices[i] < indices[j] }
+	if !sort.SliceIsSorted(indices, less) {
+		// Copy first so we don't modify our inputs.
+		indices = append(indices[0:0:0], indices...)
+		sort.Slice(indices, less)
+	}
+
 	for _, i := range indices {
 		if err := r.Delete(ctx, i); err != nil {
 			return err
@@ -188,59 +174,30 @@ func (r *Root) Delete(ctx context.Context, i uint64) error {
 	if i > MaxIndex {
 		return fmt.Errorf("index %d is out of range for the amt", i)
 	}
-	//fmt.Printf("i: %d, h: %d, nfh: %d\n", i, r.Height, nodesForHeight(int(r.Height)))
-	if i >= nodesForHeight(int(r.Height+1)) {
+	if i >= nodesForHeight(int(r.height+1)) {
 		return &ErrNotFound{i}
 	}
 
-	if err := r.Node.delete(ctx, r.store, int(r.Height), i); err != nil {
+	found, err := r.node.delete(ctx, r.store, int(r.height), i)
+	if err != nil {
 		return err
-	}
-	r.Count--
-
-	for r.Node.Bmap[0] == 1 && r.Height > 0 {
-		sub, err := r.Node.loadNode(ctx, r.store, 0, false)
-		if err != nil {
-			return err
-		}
-
-		r.Node = *sub
-		r.Height--
-	}
-
-	return nil
-}
-
-func (n *Node) delete(ctx context.Context, bs cbor.IpldStore, height int, i uint64) error {
-	subi := i / nodesForHeight(height)
-	set, _ := n.getBit(subi)
-	if !set {
+	} else if !found {
 		return &ErrNotFound{i}
 	}
-	if height == 0 {
-		n.expandValues()
 
-		n.expVals[i] = nil
-		n.clearBit(i)
-
-		return nil
-	}
-
-	subn, err := n.loadNode(ctx, bs, subi, false)
+	newHeight, err := r.node.collapse(ctx, r.store, r.height)
 	if err != nil {
 		return err
 	}
+	r.height = newHeight
 
-	if err := subn.delete(ctx, bs, height-1, i%nodesForHeight(height)); err != nil {
-		return err
+	// Something is very wrong but there's not much we can do. So we perform
+	// the operation and then tell the user that something is wrong.
+	if r.count == 0 {
+		return errInvalidCount
 	}
 
-	if subn.empty() {
-		n.clearBit(subi)
-		n.cache[subi] = nil
-		n.expLinks[subi] = cid.Undef
-	}
-
+	r.count--
 	return nil
 }
 
@@ -253,295 +210,32 @@ func (r *Root) Subtract(ctx context.Context, or *Root) error {
 }
 
 func (r *Root) ForEach(ctx context.Context, cb func(uint64, *cbg.Deferred) error) error {
-	return r.Node.forEachAt(ctx, r.store, int(r.Height), 0, 0, cb)
+	return r.node.forEachAt(ctx, r.store, r.height, 0, 0, cb)
 }
 
 func (r *Root) ForEachAt(ctx context.Context, start uint64, cb func(uint64, *cbg.Deferred) error) error {
-	return r.Node.forEachAt(ctx, r.store, int(r.Height), start, 0, cb)
-}
-
-func (n *Node) forEachAt(ctx context.Context, bs cbor.IpldStore, height int, start, offset uint64, cb func(uint64, *cbg.Deferred) error) error {
-	if height == 0 {
-		n.expandValues()
-
-		for i, v := range n.expVals {
-			if v != nil {
-				ix := offset + uint64(i)
-				if ix < start {
-					continue
-				}
-
-				if err := cb(offset+uint64(i), v); err != nil {
-					return err
-				}
-			}
-		}
-
-		return nil
-	}
-
-	if n.cache == nil {
-		n.expandLinks()
-	}
-
-	subCount := nodesForHeight(height)
-	for i, v := range n.expLinks {
-		var sub Node
-		if n.cache[i] != nil {
-			sub = *n.cache[i]
-		} else if v != cid.Undef {
-			if err := bs.Get(ctx, v, &sub); err != nil {
-				return err
-			}
-		} else {
-			continue
-		}
-
-		offs := offset + (uint64(i) * subCount)
-		nextOffs := offs + subCount
-		if start >= nextOffs {
-			continue
-		}
-
-		if err := sub.forEachAt(ctx, bs, height-1, start, offs, cb); err != nil {
-			return err
-		}
-	}
-	return nil
-
+	return r.node.forEachAt(ctx, r.store, r.height, start, 0, cb)
 }
 
 func (r *Root) FirstSetIndex(ctx context.Context) (uint64, error) {
-	return r.Node.firstSetIndex(ctx, r.store, int(r.Height))
-}
-
-var errNoVals = fmt.Errorf("no values")
-
-func (n *Node) firstSetIndex(ctx context.Context, bs cbor.IpldStore, height int) (uint64, error) {
-	if height == 0 {
-		n.expandValues()
-		for i, v := range n.expVals {
-			if v != nil {
-				return uint64(i), nil
-			}
-		}
-		// Would be really weird if we ever actually hit this
-		return 0, errNoVals
-	}
-
-	if n.cache == nil {
-		n.expandLinks()
-	}
-
-	for i := 0; i < width; i++ {
-		ok, _ := n.getBit(uint64(i))
-		if ok {
-			subn, err := n.loadNode(ctx, bs, uint64(i), false)
-			if err != nil {
-				return 0, err
-			}
-
-			ix, err := subn.firstSetIndex(ctx, bs, height-1)
-			if err != nil {
-				return 0, err
-			}
-
-			subCount := nodesForHeight(height)
-			return ix + (uint64(i) * subCount), nil
-		}
-	}
-
-	return 0, errNoVals
-}
-
-func (n *Node) expandValues() {
-	if len(n.expVals) == 0 {
-		n.expVals = make([]*cbg.Deferred, width)
-		for x := uint64(0); x < width; x++ {
-			set, ix := n.getBit(x)
-			if set {
-				n.expVals[x] = n.Values[ix]
-			}
-		}
-	}
-}
-
-func (n *Node) set(ctx context.Context, bs cbor.IpldStore, height int, i uint64, val *cbg.Deferred) (bool, error) {
-	//nfh := nodesForHeight(height)
-	//fmt.Printf("[set] h: %d, i: %d, subi: %d\n", height, i, i/nfh)
-	if height == 0 {
-		n.expandValues()
-		alreadySet, _ := n.getBit(i)
-		n.expVals[i] = val
-		n.setBit(i)
-
-		return !alreadySet, nil
-	}
-
-	nfh := nodesForHeight(height)
-
-	subn, err := n.loadNode(ctx, bs, i/nfh, true)
-	if err != nil {
-		return false, err
-	}
-
-	return subn.set(ctx, bs, height-1, i%nfh, val)
-}
-
-func (n *Node) getBit(i uint64) (bool, int) {
-	if i > 7 {
-		panic("cant deal with wider arrays yet")
-	}
-
-	if len(n.Bmap) == 0 {
-		return false, 0
-	}
-
-	if n.Bmap[0]&byte(1<<i) == 0 {
-		return false, 0
-	}
-
-	mask := byte((1 << i) - 1)
-	return true, bits.OnesCount8(n.Bmap[0] & mask)
-}
-
-func (n *Node) setBit(i uint64) {
-	if i > 7 {
-		panic("cant deal with wider arrays yet")
-	}
-
-	if len(n.Bmap) == 0 {
-		n.Bmap = [...]byte{0}
-	}
-
-	n.Bmap[0] = n.Bmap[0] | byte(1<<i)
-}
-
-func (n *Node) clearBit(i uint64) {
-	if i > 7 {
-		panic("cant deal with wider arrays yet")
-	}
-
-	if len(n.Bmap) == 0 {
-		panic("invariant violated: called clear bit on empty node")
-	}
-
-	mask := byte(0xff - (1 << i))
-
-	n.Bmap[0] = n.Bmap[0] & mask
-}
-
-func (n *Node) expandLinks() {
-	n.cache = make([]*Node, width)
-	n.expLinks = make([]cid.Cid, width)
-	for x := uint64(0); x < width; x++ {
-		set, ix := n.getBit(x)
-		if set {
-			n.expLinks[x] = n.Links[ix]
-		}
-	}
-}
-
-func (n *Node) loadNode(ctx context.Context, bs cbor.IpldStore, i uint64, create bool) (*Node, error) {
-	if n.cache == nil {
-		n.expandLinks()
-	} else {
-		if n := n.cache[i]; n != nil {
-			return n, nil
-		}
-	}
-
-	set, _ := n.getBit(i)
-
-	var subn *Node
-	if set {
-		var sn Node
-		if err := bs.Get(ctx, n.expLinks[i], &sn); err != nil {
-			return nil, err
-		}
-
-		subn = &sn
-	} else {
-		if create {
-			subn = &Node{}
-			n.setBit(i)
-		} else {
-			return nil, fmt.Errorf("no node found at (sub)index %d", i)
-		}
-	}
-	n.cache[i] = subn
-
-	return subn, nil
-}
-
-func nodesForHeight(height int) uint64 {
-	heightLogTwo := uint64(widthBits * height)
-	if heightLogTwo >= 64 {
-		// Should never happen. Max height is checked at all entry points.
-		panic("height overflow")
-	}
-	return 1 << heightLogTwo
+	return r.node.firstSetIndex(ctx, r.store, r.height)
 }
 
 func (r *Root) Flush(ctx context.Context) (cid.Cid, error) {
-	if err := r.Node.Flush(ctx, r.store, int(r.Height)); err != nil {
+	nd, err := r.node.flush(ctx, r.store, r.height)
+	if err != nil {
 		return cid.Undef, err
 	}
-
-	return r.store.Put(ctx, r)
+	root := internal.Root{
+		Height: uint64(r.height),
+		Count:  r.count,
+		Node:   *nd,
+	}
+	return r.store.Put(ctx, &root)
 }
 
-func (n *Node) empty() bool {
-	return len(n.Bmap) == 0 || n.Bmap[0] == 0
-}
-
-func (n *Node) Flush(ctx context.Context, bs cbor.IpldStore, depth int) error {
-	if depth == 0 {
-		if len(n.expVals) == 0 {
-			return nil
-		}
-		n.Bmap = [...]byte{0}
-		n.Values = nil
-		for i := uint64(0); i < width; i++ {
-			v := n.expVals[i]
-			if v != nil {
-				n.Values = append(n.Values, v)
-				n.setBit(i)
-			}
-		}
-		return nil
-	}
-
-	if len(n.expLinks) == 0 {
-		// nothing to do!
-		return nil
-	}
-
-	n.Bmap = [...]byte{0}
-	n.Links = nil
-
-	for i := uint64(0); i < width; i++ {
-		subn := n.cache[i]
-		if subn != nil {
-			if err := subn.Flush(ctx, bs, depth-1); err != nil {
-				return err
-			}
-
-			c, err := bs.Put(ctx, subn)
-			if err != nil {
-				return err
-			}
-			n.expLinks[i] = c
-		}
-
-		l := n.expLinks[i]
-		if l != cid.Undef {
-			n.Links = append(n.Links, l)
-			n.setBit(i)
-		}
-	}
-
-	return nil
+func (r *Root) Len() uint64 {
+	return r.count
 }
 
 type ErrNotFound struct {
