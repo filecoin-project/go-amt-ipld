@@ -13,7 +13,7 @@ import (
 
 var _ = xerrors.Errorf
 
-var lengthBufRoot = []byte{131}
+var lengthBufRoot = []byte{132}
 
 func (t *Root) MarshalCBOR(w io.Writer) error {
 	if t == nil {
@@ -25,6 +25,12 @@ func (t *Root) MarshalCBOR(w io.Writer) error {
 	}
 
 	scratch := make([]byte, 9)
+
+	// t.BitWidth (uint64) (uint64)
+
+	if err := cbg.WriteMajorTypeHeaderBuf(scratch, w, cbg.MajUnsignedInt, uint64(t.BitWidth)); err != nil {
+		return err
+	}
 
 	// t.Height (uint64) (uint64)
 
@@ -59,10 +65,24 @@ func (t *Root) UnmarshalCBOR(r io.Reader) error {
 		return fmt.Errorf("cbor input should be of type array")
 	}
 
-	if extra != 3 {
+	if extra != 4 {
 		return fmt.Errorf("cbor input had wrong number of fields")
 	}
 
+	// t.BitWidth (uint64) (uint64)
+
+	{
+
+		maj, extra, err = cbg.CborReadHeaderBuf(br, scratch)
+		if err != nil {
+			return err
+		}
+		if maj != cbg.MajUnsignedInt {
+			return fmt.Errorf("wrong type for uint64 field")
+		}
+		t.BitWidth = uint64(extra)
+
+	}
 	// t.Height (uint64) (uint64)
 
 	{
@@ -116,7 +136,7 @@ func (t *Node) MarshalCBOR(w io.Writer) error {
 
 	scratch := make([]byte, 9)
 
-	// t.Bmap ([1]uint8) (array)
+	// t.Bmap ([]uint8) (slice)
 	if len(t.Bmap) > cbg.ByteArrayMaxLen {
 		return xerrors.Errorf("Byte array in field t.Bmap was too long")
 	}
@@ -177,7 +197,7 @@ func (t *Node) UnmarshalCBOR(r io.Reader) error {
 		return fmt.Errorf("cbor input had wrong number of fields")
 	}
 
-	// t.Bmap ([1]uint8) (array)
+	// t.Bmap ([]uint8) (slice)
 
 	maj, extra, err = cbg.CborReadHeaderBuf(br, scratch)
 	if err != nil {
@@ -191,11 +211,9 @@ func (t *Node) UnmarshalCBOR(r io.Reader) error {
 		return fmt.Errorf("expected byte array")
 	}
 
-	if extra != 1 {
-		return fmt.Errorf("expected array to have 1 elements")
+	if extra > 0 {
+		t.Bmap = make([]uint8, extra)
 	}
-
-	t.Bmap = [1]uint8{}
 
 	if _, err := io.ReadFull(br, t.Bmap[:]); err != nil {
 		return err

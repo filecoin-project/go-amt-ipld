@@ -8,13 +8,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/filecoin-project/go-amt-ipld/v3/internal"
 	block "github.com/ipfs/go-block-format"
 	cid "github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
 	assert "github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	cbg "github.com/whyrusleeping/cbor-gen"
+
+	"github.com/filecoin-project/go-amt-ipld/v3/internal"
 )
 
 var numbers []cbg.CBORMarshaler
@@ -37,6 +38,17 @@ type bsStats struct {
 	// Bytes written
 	bw int
 }
+
+// func TestMain(m *testing.M) {
+// 	// Hack to test with multiple widths, without hassle.
+// 	for defaultBitWidth = 2; defaultBitWidth <= 18; defaultBitWidth++ {
+// 		fmt.Printf("WIDTH %d\n", defaultBitWidth)
+// 		if code := m.Run(); code != 0 {
+// 			os.Exit(code)
+// 		}
+// 	}
+// 	os.Exit(0)
+// }
 
 type mockBlocks struct {
 	data  map[cid.Cid]block.Block
@@ -69,11 +81,45 @@ func (mb *mockBlocks) report(b *testing.B) {
 	b.ReportMetric(float64(mb.stats.w)/float64(b.N), "puts/op")
 }
 
+func TestNew(t *testing.T) {
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
+
+	t.Run("default config", func(t *testing.T) {
+		a, err := NewAMT(bs)
+		require.NoError(t, err)
+		assert.Equal(t, defaultBitWidth, a.bitWidth)
+
+		c, err := FromArray(ctx, bs, numbers)
+		require.NoError(t, err)
+		as, err := LoadAMT(ctx, bs, c)
+		require.NoError(t, err)
+		assert.Equal(t, defaultBitWidth, as.bitWidth)
+	})
+
+	t.Run("explicit bitwidth", func(t *testing.T) {
+		a, err := NewAMT(bs, UseTreeBitWidth(4))
+		require.NoError(t, err)
+		assert.Equal(t, uint(4), a.bitWidth)
+
+		c, err := FromArray(ctx, bs, numbers, UseTreeBitWidth(4))
+		require.NoError(t, err)
+		if defaultBitWidth != uint(4) {
+			_, err = LoadAMT(ctx, bs, c) // Fails to load with implicit default bitwidth
+			assert.Error(t, err)
+		}
+		as, err := LoadAMT(ctx, bs, c, UseTreeBitWidth(4))
+		require.NoError(t, err)
+		assert.Equal(t, uint(4), as.bitWidth)
+	})
+}
+
 func TestBasicSetGet(t *testing.T) {
 	trackingBs := newMockBlocks()
 	bs := cbor.NewCborStore(trackingBs)
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
 	assertSet(t, a, 2, "foo")
 	assertGet(ctx, t, a, 2, "foo")
@@ -98,14 +144,15 @@ func TestBasicSetGet(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assert.Equal(t, "bafy2bzacea4z4wxtdoo6ikgqkoe4gm364xhdtreycvfy5txvprpbtunx5jnwy", c.String())
-	assert.Equal(t, bsStats{r: 1, w: 2, br: 12, bw: 24}, trackingBs.stats)
+	assert.Equal(t, "bafy2bzacedv5uu5za6oqtnozjvju5lhbgaybayzhw4txiojw7hd47ktgbv5wc", c.String())
+	assert.Equal(t, bsStats{r: 1, w: 2, br: 13, bw: 26}, trackingBs.stats)
 }
 
 // func TestRoundTrip(t *testing.T) {
 // 	bs := cbor.NewCborStore(newMockBlocks())
 // 	ctx := context.Background()
-// 	a := NewAMT(bs)
+// 	a, err := NewAMT(bs)
+// 	require.NoError(t, err)
 // 	emptyCid, err := a.Flush(ctx)
 // 	require.NoError(t, err)
 
@@ -119,91 +166,81 @@ func TestBasicSetGet(t *testing.T) {
 // 	require.Equal(t, emptyCid, c)
 // }
 
-func TestOutOfRange(t *testing.T) {
+func TestMaxRange(t *testing.T) {
 	ctx := context.Background()
 	trackingBs := newMockBlocks()
 	bs := cbor.NewCborStore(trackingBs)
 
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
-	err := a.Set(ctx, 1<<63+4, "what is up 1")
-	if err == nil {
-		t.Fatal("should have failed to set value out of range")
-	}
+	err = a.Set(ctx, MaxIndex, cborstr("what is up 1"))
+	require.NoError(t, err)
 
-	err = a.Set(ctx, MaxIndex+1, "what is up 2")
-	if err == nil {
-		t.Fatal("should have failed to set value out of range")
-	}
-
-	err = a.Set(ctx, MaxIndex, "what is up 3")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if a.height != internal.MaxHeight {
-		t.Fatal("expected to be at the maximum height")
-	}
+	err = a.Set(ctx, MaxIndex+1, cborstr("what is up 2"))
+	require.Error(t, err)
 
 	c, err := a.Flush(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	assert.Equal(t, "bafy2bzacedozbiofn5fnrtfzy3tk5k7inyp5ncusdtb6xyl5z4rstdgqbad7g", c.String())
-	assert.Equal(t, bsStats{r: 0, w: 21, br: 0, bw: 979}, trackingBs.stats)
+	assert.Equal(t, "bafy2bzacebggnpdo4sclwgg3rzewhgoxppjmkhyr6anq3adk24dlnmcfu5mty", c.String())
+	assert.Equal(t, bsStats{r: 0, w: 22, br: 0, bw: 1030}, trackingBs.stats)
+}
+func TestMaxRange11(t *testing.T) {
+	ctx := context.Background()
+	bs := cbor.NewCborStore(newMockBlocks())
+
+	a, err := NewAMT(bs, UseTreeBitWidth(11))
+	require.NoError(t, err)
+
+	err = a.Set(ctx, MaxIndex, cborstr("what is up 1"))
+	require.NoError(t, err)
+
+	err = a.Set(ctx, MaxIndex+1, cborstr("what is up 2"))
+	require.Error(t, err)
 }
 
 func assertDelete(t *testing.T, r *Root, i uint64) {
 	ctx := context.Background()
 
 	t.Helper()
-	if err := r.Delete(ctx, i); err != nil {
-		t.Fatal(err)
-	}
+	found, err := r.Delete(ctx, i)
+	require.NoError(t, err)
+	require.True(t, found)
 
-	err := r.Get(ctx, i, nil)
-	if err == nil {
-		t.Fatal("expected an error")
-	}
-	enf, ok := err.(*ErrNotFound)
-	if !ok {
-		t.Fatal("got wrong error: ", err)
-	}
-
-	_ = enf
-	/* TODO: do the errors better so this passes
-	if enf.Index != i {
-		t.Fatal("got error not found with wrong index?", enf)
-	}
-	*/
+	found, err = r.Get(ctx, i, nil)
+	require.NoError(t, err)
+	require.False(t, found)
 }
 
 func assertSet(t *testing.T, r *Root, i uint64, val string) {
 	ctx := context.Background()
 
 	t.Helper()
-	if err := r.Set(ctx, i, val); err != nil {
+	if err := r.Set(ctx, i, cborstr(val)); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func assertCount(t testing.TB, r *Root, c uint64) {
 	t.Helper()
-	if r.count != c {
-		t.Fatal("count is wrong")
-	}
+	require.Equal(t, c, r.count)
 }
 
 func assertGet(ctx context.Context, t testing.TB, r *Root, i uint64, val string) {
-
 	t.Helper()
+	found, err := r.Get(ctx, i, nil)
+	require.NoError(t, err)
+	require.True(t, found)
 
-	var out string
-	if err := r.Get(ctx, i, &out); err != nil {
-		t.Fatal(err)
-	}
+	var out CborByteArray
+	found, err = r.Get(ctx, i, &out)
+	require.NoError(t, err)
+	require.True(t, found)
 
-	if out != val {
+	if !bytes.Equal(out, *cborstr(val)) {
 		t.Fatal("value we got out didnt match expectation")
 	}
 }
@@ -212,19 +249,12 @@ func TestExpand(t *testing.T) {
 	trackingBs := newMockBlocks()
 	bs := cbor.NewCborStore(trackingBs)
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
-	if err := a.Set(ctx, 2, "foo"); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := a.Set(ctx, 11, "bar"); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := a.Set(ctx, 79, "baz"); err != nil {
-		t.Fatal(err)
-	}
+	assertSet(t, a, 2, "foo")
+	assertSet(t, a, 11, "bar")
+	assertSet(t, a, 79, "baz")
 
 	assertGet(ctx, t, a, 2, "foo")
 	assertGet(ctx, t, a, 11, "bar")
@@ -244,22 +274,21 @@ func TestExpand(t *testing.T) {
 	assertGet(ctx, t, na, 11, "bar")
 	assertGet(ctx, t, na, 79, "baz")
 
-	assert.Equal(t, "bafy2bzaced25ah2r4gcerysjyrjqpqw72jvdy5ziwxk53ldxibktwmgkfgc22", c.String())
-	assert.Equal(t, bsStats{r: 9, w: 9, br: 369, bw: 369}, trackingBs.stats)
+	assert.Equal(t, "bafy2bzacecughjbclx3lbqwibrwc6pe7nttlc3qewedsrayghsvh5j5lpofiq", c.String())
+	assert.Equal(t, bsStats{r: 6, w: 6, br: 261, bw: 261}, trackingBs.stats)
 }
 
 func TestInsertABunch(t *testing.T) {
 	trackingBs := newMockBlocks()
 	bs := cbor.NewCborStore(trackingBs)
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
 	num := uint64(5000)
 
 	for i := uint64(0); i < num; i++ {
-		if err := a.Set(ctx, i, "foo foo bar"); err != nil {
-			t.Fatal(err)
-		}
+		assertSet(t, a, i, "foo foo bar")
 	}
 
 	for i := uint64(0); i < num; i++ {
@@ -282,20 +311,20 @@ func TestInsertABunch(t *testing.T) {
 
 	assertCount(t, na, num)
 
-	assert.Equal(t, "bafy2bzacedjhcq7542wu7ike4i4srgq7hwxxc5pmw5sub4secqk33mugl4zda", c.String())
-	assert.Equal(t, bsStats{r: 1302, w: 1302, br: 171567, bw: 171567}, trackingBs.stats)
+	assert.Equal(t, "bafy2bzacecfquuqzqzlox25aynodzw2qhxijdzfvno6tibyes3kb6nd3f7uxa", c.String())
+	assert.Equal(t, bsStats{r: 717, w: 717, br: 94379, bw: 94379}, trackingBs.stats)
 }
 
 func TestFlushRead(t *testing.T) {
 	trackingBs := newMockBlocks()
 	bs := cbor.NewCborStore(trackingBs)
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
 
 	num := uint64(100)
 
 	for i := uint64(0); i < num; i++ {
-		if err := a.Set(ctx, i, "foo foo bar"); err != nil {
+		if err := a.Set(ctx, i, cborstr("foo foo bar")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -303,9 +332,9 @@ func TestFlushRead(t *testing.T) {
 	for i := uint64(0); i < num; i++ {
 		assertGet(ctx, t, a, i, "foo foo bar")
 	}
-	assert.Equal(t, bsStats{r: 9, w: 9, br: 1157, bw: 1157}, trackingBs.stats)
+	assert.Equal(t, bsStats{r: 0, w: 0, br: 0, bw: 0}, trackingBs.stats)
 
-	_, err := a.Flush(ctx)
+	_, err = a.Flush(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +343,7 @@ func TestFlushRead(t *testing.T) {
 		assertGet(ctx, t, a, i, "foo foo bar")
 	}
 
-	assert.Equal(t, bsStats{r: 9, w: 25, br: 1157, bw: 3086}, trackingBs.stats)
+	assert.Equal(t, bsStats{r: 0, w: 16, br: 0, bw: 1930}, trackingBs.stats)
 }
 
 func TestForEachWithoutFlush(t *testing.T) {
@@ -327,11 +356,12 @@ func TestForEachWithoutFlush(t *testing.T) {
 		{8, 9, 64},
 		{64, 8, 9},
 	} {
-		amt := NewAMT(bs)
+		amt, err := NewAMT(bs)
+		require.NoError(t, err)
 		set1 := make(map[uint64]struct{})
 		set2 := make(map[uint64]struct{})
 		for _, val := range vals {
-			err := amt.Set(ctx, val, "")
+			err := amt.Set(ctx, val, cborstr(""))
 			require.NoError(t, err)
 
 			set1[val] = struct{}{}
@@ -345,7 +375,7 @@ func TestForEachWithoutFlush(t *testing.T) {
 		assert.Equal(t, make(map[uint64]struct{}), set1)
 
 		// ensure it still works after flush
-		_, err := amt.Flush(ctx)
+		_, err = amt.Flush(ctx)
 		require.NoError(t, err)
 
 		amt.ForEach(ctx, func(u uint64, deferred *cbg.Deferred) error {
@@ -372,7 +402,8 @@ func TestChaos(t *testing.T) {
 	r := rand.New(rand.NewSource(seed))
 	t.Logf("seed: %d", seed)
 
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 	c, err := a.Flush(ctx)
 	assert.NoError(t, err)
 
@@ -396,19 +427,14 @@ func TestChaos(t *testing.T) {
 
 		for _, index := range o.idxs {
 			if !o.del {
-				err := a.Set(ctx, index, "test")
+				err := a.Set(ctx, index, cborstr("test"))
 				testMap[index] = struct{}{}
 				assert.NoError(t, err)
 			} else {
-				err := a.Delete(ctx, index)
+				_, err := a.Delete(ctx, index)
 				delete(testMap, index)
-				if err != nil {
-					if _, ok := err.(*ErrNotFound); !ok {
-						assert.NoError(t, err)
-					}
-				}
+				require.NoError(t, err)
 			}
-
 		}
 
 		fail := false
@@ -447,7 +473,8 @@ func TestChaos(t *testing.T) {
 func TestInsertABunchWithDelete(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
 	num := 12000
 	originSet := make(map[uint64]bool, num)
@@ -469,9 +496,7 @@ func TestInsertABunchWithDelete(t *testing.T) {
 
 	for i := uint64(0); i < uint64(num); i++ {
 		if originSet[i] {
-			if err := a.Set(ctx, i, "foo foo bar"); err != nil {
-				t.Fatal(err)
-			}
+			assertSet(t, a, i, "foo foo bar")
 		}
 	}
 
@@ -521,7 +546,8 @@ func TestDeleteFirstEntry(t *testing.T) {
 	trackingBs := newMockBlocks()
 	bs := cbor.NewCborStore(trackingBs)
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
 	assertSet(t, a, 0, "cat")
 	assertSet(t, a, 27, "cat")
@@ -539,19 +565,21 @@ func TestDeleteFirstEntry(t *testing.T) {
 	}
 
 	assertCount(t, na, 1)
-	assert.Equal(t, "bafy2bzacec4rpjwfkzp4n2wj233774cnhk5o2d7pub2gso2g3isdfxnxuhbr2", c.String())
-	assert.Equal(t, bsStats{r: 2, w: 2, br: 21, bw: 21}, trackingBs.stats)
+	assert.Equal(t, "bafy2bzacecmxrjeri2ojuy3riae2mpbnztx2hqggqgkcrxao2nwpga77j2vqe", c.String())
+	assert.Equal(t, bsStats{r: 1, w: 1, br: 13, bw: 13}, trackingBs.stats)
 }
 
 func TestDelete(t *testing.T) {
 	trackingBs := newMockBlocks()
 	bs := cbor.NewCborStore(trackingBs)
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
-	// Check that deleting out of range of the current AMT fails as we expect it to
-	err := a.Delete(ctx, 200)
-	assert.EqualValues(t, &ErrNotFound{200}, err)
+	// Check that deleting out of range of the current AMT returns not found
+	found, err := a.Delete(ctx, 200)
+	require.NoError(t, err)
+	require.False(t, found)
 
 	assertSet(t, a, 0, "cat")
 	assertSet(t, a, 1, "cat")
@@ -590,7 +618,8 @@ func TestDelete(t *testing.T) {
 
 	assertCount(t, na, 1)
 
-	a2 := NewAMT(bs)
+	a2, err := NewAMT(bs)
+	require.NoError(t, err)
 	assertSet(t, a2, 24, "dog")
 
 	a2c, err := a2.Flush(ctx)
@@ -604,15 +633,16 @@ func TestDelete(t *testing.T) {
 		fmt.Printf("%#v\n", a2)
 		t.Fatal("unexpected cid", c, a2c)
 	}
-	assert.Equal(t, "bafy2bzacedtq64mekzyjshwa3kxyt4kt5volln6acoavl4p7dexzczefwj7uw", c.String())
-	assert.Equal(t, bsStats{r: 1, w: 4, br: 51, bw: 120}, trackingBs.stats)
+	assert.Equal(t, "bafy2bzacebnnxpurpb3zqqr22i7ch4uruz6hgykn3ryzoo4hh3ox2m2kufsvg", c.String())
+	assert.Equal(t, bsStats{r: 1, w: 4, br: 52, bw: 122}, trackingBs.stats)
 }
 
 func TestDeleteReduceHeight(t *testing.T) {
 	trackingBs := newMockBlocks()
 	bs := cbor.NewCborStore(trackingBs)
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
 	assertSet(t, a, 1, "thing")
 
@@ -644,8 +674,8 @@ func TestDeleteReduceHeight(t *testing.T) {
 	if c1 != c3 {
 		t.Fatal("structures did not match after insert/delete")
 	}
-	assert.Equal(t, "bafy2bzaceccdkhc6fuhybskfl4hoydekua2su2vz45molwmy3ah36pnsmntvc", c1.String())
-	assert.Equal(t, bsStats{r: 3, w: 5, br: 116, bw: 144}, trackingBs.stats)
+	assert.Equal(t, "bafy2bzacebmkyah6kppbszluix3g332hntzx6wfdcqcr5hjdsaxri5jhgrdmo", c1.String())
+	assert.Equal(t, bsStats{r: 3, w: 5, br: 117, bw: 147}, trackingBs.stats)
 }
 
 func BenchmarkAMTInsertBulk(b *testing.B) {
@@ -656,12 +686,13 @@ func BenchmarkAMTInsertBulk(b *testing.B) {
 	ctx := context.Background()
 
 	for i := 0; i < b.N; i++ {
-		a := NewAMT(bs)
+		a, err := NewAMT(bs)
+		require.NoError(b, err)
 
 		num := uint64(5000)
 
 		for i := uint64(0); i < num; i++ {
-			if err := a.Set(ctx, i, "foo foo bar"); err != nil {
+			if err := a.Set(ctx, i, cborstr("foo foo bar")); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -694,7 +725,8 @@ func BenchmarkAMTLoadAndInsert(b *testing.B) {
 
 	bs := cbor.NewCborStore(mock)
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(b, err)
 
 	c, err := a.Flush(ctx)
 	if err != nil {
@@ -707,7 +739,7 @@ func BenchmarkAMTLoadAndInsert(b *testing.B) {
 			b.Fatal(err)
 		}
 
-		if err := na.Set(ctx, i, "some value"); err != nil {
+		if err := na.Set(ctx, i, cborstr("some value")); err != nil {
 			b.Fatal(err)
 		}
 		c, err = na.Flush(ctx)
@@ -721,7 +753,8 @@ func TestForEach(t *testing.T) {
 	trackingBs := newMockBlocks()
 	bs := cbor.NewCborStore(trackingBs)
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
 	var indexes []uint64
 	for i := 0; i < 10000; i++ {
@@ -731,7 +764,7 @@ func TestForEach(t *testing.T) {
 	}
 
 	for _, i := range indexes {
-		if err := a.Set(ctx, i, "value"); err != nil {
+		if err := a.Set(ctx, i, cborstr("value")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -742,8 +775,8 @@ func TestForEach(t *testing.T) {
 
 	assertCount(t, a, uint64(len(indexes)))
 
-	assert.Equal(t, bsStats{r: 585, w: 585, br: 36227, bw: 36227}, trackingBs.stats)
-	err := a.ForEach(ctx, func(i uint64, v *cbg.Deferred) error {
+	assert.Equal(t, bsStats{r: 0, w: 0, br: 0, bw: 0}, trackingBs.stats)
+	err = a.ForEach(ctx, func(i uint64, v *cbg.Deferred) error {
 		return nil
 	})
 	if err != nil {
@@ -762,7 +795,7 @@ func TestForEach(t *testing.T) {
 
 	assertCount(t, na, uint64(len(indexes)))
 
-	assert.Equal(t, bsStats{r: 586, w: 2016, br: 36366, bw: 124875}, trackingBs.stats)
+	assert.Equal(t, bsStats{r: 1, w: 1431, br: 140, bw: 88649}, trackingBs.stats)
 	var x int
 	err = na.ForEach(ctx, func(i uint64, v *cbg.Deferred) error {
 		if i != indexes[x] {
@@ -785,8 +818,8 @@ func TestForEach(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assert.Equal(t, "bafy2bzaceccb5cgeysdu6ferucawc6twfedv5gc3iqgh2ko7o7e25r5ucpf4u", c.String())
-	assert.Equal(t, bsStats{r: 3446, w: 2016, br: 213384, bw: 124875}, trackingBs.stats)
+	assert.Equal(t, "bafy2bzaceanqxtbsuyhqgxubiq6vshtbhktmzp2if4g6kxzttxmzkdxmtipcm", c.String())
+	assert.Equal(t, bsStats{r: 1431, w: 1431, br: 88649, bw: 88649}, trackingBs.stats)
 }
 
 // Test is for specs-actors functionality that needs to be matched
@@ -794,12 +827,13 @@ func TestForEachMutate(t *testing.T) {
 	trackingBs := newMockBlocks()
 	bs := cbor.NewCborStore(trackingBs)
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
 	indexes := []uint64{1, 9, 66, 74, 82, 515}
 
 	for _, i := range indexes {
-		if err := a.Set(ctx, i, "value"); err != nil {
+		if err := a.Set(ctx, i, cborstr("value")); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -828,14 +862,15 @@ func TestForEachMutate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assert.Equal(t, "bafy2bzacecipze2lcvpcrcqy4nyqs4p2sinbytflyyuytge5lc6uz632bj6fu", c.String())
-	assert.Equal(t, bsStats{r: 17, w: 12, br: 910, bw: 572}, trackingBs.stats)
+	assert.Equal(t, "bafy2bzaced44wtasbcukqjqicvxzcyn5up6sorr5khzbdkl6zjeo736f377ew", c.String())
+	assert.Equal(t, bsStats{r: 12, w: 12, br: 573, bw: 573}, trackingBs.stats)
 }
 
 func TestForEachAt(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
 	r := rand.New(rand.NewSource(101))
 
@@ -847,7 +882,7 @@ func TestForEachAt(t *testing.T) {
 	}
 
 	for _, i := range indexes {
-		if err := a.Set(ctx, i, fmt.Sprint(i)); err != nil {
+		if err := a.Set(ctx, i, cborstr(fmt.Sprint(i))); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -897,11 +932,12 @@ func TestFirstSetIndex(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
 
-	vals := []uint64{0, 1, 5, internal.Width, internal.Width + 1, 276, 1234, 62881923}
+	vals := []uint64{0, 1, 5, 1 << uint64(defaultBitWidth), 1<<uint64(defaultBitWidth) + 1, 276, 1234, 62881923}
 	for i, v := range vals {
 		t.Log(i, v)
-		a := NewAMT(bs)
-		if err := a.Set(ctx, v, fmt.Sprint(v)); err != nil {
+		a, err := NewAMT(bs)
+		require.NoError(t, err)
+		if err := a.Set(ctx, v, cborstr(fmt.Sprint(v))); err != nil {
 			t.Fatal(err)
 		}
 
@@ -932,8 +968,9 @@ func TestFirstSetIndex(t *testing.T) {
 		if fsi != v {
 			t.Fatal("got wrong index out after serialization")
 		}
-		err = after.Delete(ctx, v)
+		found, err := after.Delete(ctx, v)
 		require.NoError(t, err)
+		require.True(t, found)
 		fsi, err = after.FirstSetIndex(ctx)
 		require.Error(t, err)
 	}
@@ -942,7 +979,8 @@ func TestFirstSetIndex(t *testing.T) {
 func TestEmptyCIDStability(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
 	c1, err := a.Flush(ctx)
 	require.NoError(t, err)
@@ -957,7 +995,7 @@ func TestEmptyCIDStability(t *testing.T) {
 	assert.Equal(t, c1, c2)
 
 	// adding and removing and item should not affect its cid
-	a.Set(ctx, 0, "")
+	a.Set(ctx, 0, cborstr(""))
 	a.Delete(ctx, 0)
 
 	c3, err := a.Flush(ctx)
@@ -969,8 +1007,7 @@ func TestRoundTrip(t *testing.T) {
 	trackingBs := newMockBlocks()
 	bs := cbor.NewCborStore(trackingBs)
 	ctx := context.Background()
-	a := NewAMT(bs)
-	emptyCid, err := a.Flush(ctx)
+	a, err := NewAMT(bs)
 	require.NoError(t, err)
 
 	k := uint64(100000)
@@ -980,35 +1017,34 @@ func TestRoundTrip(t *testing.T) {
 	c, err := a.Flush(ctx)
 	require.NoError(t, err)
 
-	// TODO fix this, this is testing locked in bug functionality
-	// require.Equal(t, emptyCid, c)
-	assert.Equal(t, "bafy2bzacedswlcz5ddgqnyo3sak3jmhmkxashisnlpq6ujgyhe4mlobzpnhs6", emptyCid.String())
-	assert.Equal(t, "bafy2bzacec3ltjhtro3i4usbev24phgv6hb4fbfdaa2lxid4uod3zw4v3uce6", c.String())
-	assert.Equal(t, bsStats{r: 0, w: 2, br: 0, bw: 16}, trackingBs.stats)
+	// // TODO fix this, this is testing locked in bug functionality
+	// // require.Equal(t, emptyCid, c)
+	// assert.Equal(t, "bafy2bzacedswlcz5ddgqnyo3sak3jmhmkxashisnlpq6ujgyhe4mlobzpnhs6", emptyCid.String())
+	// assert.Equal(t, "bafy2bzacec3ltjhtro3i4usbev24phgv6hb4fbfdaa2lxid4uod3zw4v3uce6", c.String())
+	// assert.Equal(t, bsStats{r: 0, w: 2, br: 0, bw: 16}, trackingBs.stats)
 
-	// * This is just testing the bug functionality, remove if bug removed
-	newAmt, err := LoadAMT(ctx, bs, c)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertSet(t, newAmt, 9, "foo")
-	assertGet(ctx, t, newAmt, 9, "foo")
-	assert.Equal(t, uint64(5), newAmt.height)
-	assertSet(t, newAmt, 66, "bar")
-	assertGet(ctx, t, newAmt, 66, "bar")
-	assert.Equal(t, uint64(5), newAmt.height)
-	assertSet(t, newAmt, 515, "baz")
-	assertGet(ctx, t, newAmt, 515, "baz")
-	assert.Equal(t, uint64(5), newAmt.height)
+	// // * This is just testing the bug functionality, remove if bug removed
+	// newAmt, err := LoadAMT(ctx, bs, c)
+	// if err != nil {
+	// 	t.Fatal(err)
+	// }
+	// assertSet(t, newAmt, 9, "foo")
+	// assertGet(ctx, t, newAmt, 9, "foo")
+	// assert.Equal(t, uint64(5), newAmt.height)
+	// assertSet(t, newAmt, 66, "bar")
+	// assertGet(ctx, t, newAmt, 66, "bar")
+	// assert.Equal(t, uint64(5), newAmt.height)
+	// assertSet(t, newAmt, 515, "baz")
+	// assertGet(ctx, t, newAmt, 515, "baz")
+	// assert.Equal(t, uint64(5), newAmt.height)
 
-	assertDelete(t, newAmt, 9)
-	assert.Equal(t, uint64(3), newAmt.height)
-	assertDelete(t, newAmt, 515)
-	assert.Equal(t, uint64(2), newAmt.height)
+	// assertDelete(t, newAmt, 9)
+	// assert.Equal(t, uint64(3), newAmt.height)
+	// assertDelete(t, newAmt, 515)
+	// assert.Equal(t, uint64(2), newAmt.height)
 
-	c, err = newAmt.Flush(ctx)
-	assert.Equal(t, "bafy2bzaceblz37c42237c42h3y7vwzcqdjolm6fmmturwcifbd7zx2afvazke", c.String())
-	assert.Equal(t, bsStats{r: 1, w: 5, br: 8, bw: 124}, trackingBs.stats)
+	assert.Equal(t, "bafy2bzacedijw74yui7otvo63nfl3hdq2vdzuy7wx2tnptwed6zml4vvz7wee", c.String())
+	assert.Equal(t, bsStats{r: 0, w: 1, br: 0, bw: 9}, trackingBs.stats)
 }
 func TestBadBitfield(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
@@ -1018,7 +1054,7 @@ func TestBadBitfield(t *testing.T) {
 	require.NoError(t, err)
 
 	var root internal.Root
-	root.Node.Bmap[0] = 0xff
+	root.Node.Bmap = []byte{0xff}
 	root.Node.Links = append(root.Node.Links, subnode)
 	root.Height = 10
 	root.Count = 10
@@ -1045,13 +1081,14 @@ func TestForEachSkip(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
 
-	a := NewAMT(bs)
-	require.NoError(t, a.Set(ctx, 0, 0))
-	require.NoError(t, a.Set(ctx, 199, 0))
-	require.NoError(t, a.Set(ctx, 201, 0))
-	require.NoError(t, a.Set(ctx, 10000, 0))
-	require.NoError(t, a.Set(ctx, 10001, 0))
-	require.NoError(t, a.Set(ctx, 11001, 0))
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
+	require.NoError(t, a.Set(ctx, 0, cborstr("")))
+	require.NoError(t, a.Set(ctx, 199, cborstr("")))
+	require.NoError(t, a.Set(ctx, 201, cborstr("")))
+	require.NoError(t, a.Set(ctx, 10000, cborstr("")))
+	require.NoError(t, a.Set(ctx, 10001, cborstr("")))
+	require.NoError(t, a.Set(ctx, 11001, cborstr("")))
 	var keys []uint64
 	require.NoError(t, a.ForEachAt(ctx, 200, func(i uint64, _ *cbg.Deferred) error {
 		keys = append(keys, i)
@@ -1063,32 +1100,189 @@ func TestForEachSkip(t *testing.T) {
 func TestBatch(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	ctx := context.Background()
-	a := NewAMT(bs)
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
 
 	require.NoError(t, a.BatchSet(ctx, numbers))
 	assertEquals(ctx, t, a, numbers)
 
 	c, err := a.Flush(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
-	clean, err := LoadAMT(ctx, bs, c)
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Run("with strict, error if a key is missing", func(t *testing.T) {
+		clean, err := LoadAMT(ctx, bs, c)
+		require.NoError(t, err)
+		assertEquals(ctx, t, clean, numbers)
 
-	assertEquals(ctx, t, clean, numbers)
-	require.NoError(t, a.BatchDelete(ctx, []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}))
-	assertCount(t, a, 0)
+		_, err = clean.BatchDelete(ctx, []uint64{100}, true)
+		require.Error(t, err)
+	})
+	t.Run("with strict, delete no keys ok", func(t *testing.T) {
+		clean, err := LoadAMT(ctx, bs, c)
+		require.NoError(t, err)
+		assertEquals(ctx, t, clean, numbers)
+
+		mod, err := clean.BatchDelete(ctx, []uint64{}, true)
+		require.NoError(t, err)
+		assert.False(t, mod)
+		assertEquals(ctx, t, clean, numbers)
+	})
+	t.Run("with strict, delete some but not all keys ok", func(t *testing.T) {
+		clean, err := LoadAMT(ctx, bs, c)
+		require.NoError(t, err)
+		assertEquals(ctx, t, clean, numbers)
+
+		mod, err := clean.BatchDelete(ctx, []uint64{0, 1, 2, 3}, true)
+		require.NoError(t, err)
+		assert.True(t, mod)
+		assertEquals(ctx, t, clean, numbers[4:])
+	})
+	t.Run("with strict, error to delete some keys with one missing", func(t *testing.T) {
+		clean, err := LoadAMT(ctx, bs, c)
+		require.NoError(t, err)
+		assertEquals(ctx, t, clean, numbers)
+
+		_, err = clean.BatchDelete(ctx, []uint64{0, 1, 2, 3, 100}, true)
+		require.Error(t, err)
+	})
+	t.Run("with strict, delete all keys ok", func(t *testing.T) {
+		clean, err := LoadAMT(ctx, bs, c)
+		require.NoError(t, err)
+		assertEquals(ctx, t, clean, numbers)
+
+		mod, err := clean.BatchDelete(ctx, []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, true)
+		require.NoError(t, err)
+		assert.True(t, mod)
+		assertEquals(ctx, t, clean, []cbg.CBORMarshaler{})
+	})
+	t.Run("without strict, delete only absent keys ok", func(t *testing.T) {
+		clean, err := LoadAMT(ctx, bs, c)
+		require.NoError(t, err)
+		assertEquals(ctx, t, clean, numbers)
+
+		mod, err := clean.BatchDelete(ctx, []uint64{100, 101}, false)
+		require.NoError(t, err)
+		assert.False(t, mod)
+		assertEquals(ctx, t, clean, numbers)
+	})
+	t.Run("without strict, delete some keys ok", func(t *testing.T) {
+		clean, err := LoadAMT(ctx, bs, c)
+		require.NoError(t, err)
+		assertEquals(ctx, t, clean, numbers)
+
+		mod, err := clean.BatchDelete(ctx, []uint64{0, 1, 2, 3, 100, 101}, false)
+		require.NoError(t, err)
+		assert.True(t, mod)
+		assertEquals(ctx, t, clean, numbers[4:])
+	})
+	t.Run("without strict, delete all keys ok", func(t *testing.T) {
+		clean, err := LoadAMT(ctx, bs, c)
+		require.NoError(t, err)
+		assertEquals(ctx, t, clean, numbers)
+
+		mod, err := clean.BatchDelete(ctx, []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}, false)
+		require.NoError(t, err)
+		assert.True(t, mod)
+		assertEquals(ctx, t, clean, []cbg.CBORMarshaler{})
+	})
 }
 
-func assertEquals(ctx context.Context, t testing.TB, a *Root, values []cbg.CBORMarshaler) {
-	require.NoError(t, a.ForEach(ctx, func(i uint64, val *cbg.Deferred) error {
+func TestSetOrderIndependent(t *testing.T) {
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
+
+	nKeys := 8 * 8 * 8
+
+	for i := 0; i < nKeys; i++ {
+		assertSet(t, a, uint64(i), "foo")
+	}
+
+	c, err := a.Flush(ctx)
+	require.NoError(t, err)
+
+	vals := make([]int, 100)
+
+	for i := range vals {
+		vals[i] = rand.Intn(nKeys)
+	}
+
+	res := map[cid.Cid]struct{}{}
+	for i := 0; i < 20; i++ {
+		a, err := LoadAMT(ctx, bs, c)
+		require.NoError(t, err)
+
+		rand.Shuffle(len(vals), func(i, j int) {
+			vals[i], vals[j] = vals[j], vals[i]
+		})
+
+		for _, k := range vals {
+			assertSet(t, a, uint64(k), "foo2")
+		}
+
+		c, err := a.Flush(ctx)
+		require.NoError(t, err)
+		res[c] = struct{}{}
+	}
+
+	require.Len(t, res, 1)
+}
+
+func TestDeleteOrderIndependent(t *testing.T) {
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
+
+	nKeys := 8 * 8 * 8 * 8
+
+	for i := 0; i < nKeys; i++ {
+		assertSet(t, a, uint64(i), "foo")
+	}
+
+	c, err := a.Flush(ctx)
+	require.NoError(t, err)
+
+	mvals := map[int]struct{}{}
+	for i := 0; i < 100; i++ {
+		mvals[rand.Intn(nKeys)] = struct{}{}
+	}
+	vals := make([]int, 0, len(mvals))
+	for v := range mvals {
+		vals = append(vals, v)
+	}
+
+	res := map[cid.Cid]struct{}{}
+	for i := 0; i < 20; i++ {
+		a, err := LoadAMT(ctx, bs, c)
+		require.NoError(t, err)
+
+		rand.Shuffle(len(vals), func(i, j int) {
+			vals[i], vals[j] = vals[j], vals[i]
+		})
+
+		for _, k := range vals {
+			assertDelete(t, a, uint64(k))
+		}
+
+		c, err := a.Flush(ctx)
+		require.NoError(t, err)
+		res[c] = struct{}{}
+	}
+
+	require.Len(t, res, 1)
+}
+
+func assertEquals(ctx context.Context, t testing.TB, a *Root, expected []cbg.CBORMarshaler) {
+	// Note: the AMT is not necessarily indexed from zero, so indexes may not align.
+	expIndex := 0
+	require.NoError(t, a.ForEach(ctx, func(amtIdx uint64, val *cbg.Deferred) error {
 		var buf bytes.Buffer
-		require.NoError(t, values[i].MarshalCBOR(&buf))
-		require.Equal(t, buf.Bytes(), val.Raw)
+		require.NoError(t, expected[expIndex].MarshalCBOR(&buf))
+		require.Equal(t, val.Raw, buf.Bytes(), "AMT index %d, expectation index %d", amtIdx, expIndex)
+		expIndex++
 		return nil
 	}))
-	assertCount(t, a, uint64(len(values)))
+	assertCount(t, a, uint64(len(expected)))
 }
