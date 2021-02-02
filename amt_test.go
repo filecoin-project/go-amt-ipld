@@ -174,19 +174,24 @@ func TestMaxRange(t *testing.T) {
 	a, err := NewAMT(bs)
 	require.NoError(t, err)
 
-	err = a.Set(ctx, MaxIndex, cborstr("what is up 1"))
+	err = a.Set(ctx, MaxIndex, cborstr("what is up"))
 	require.NoError(t, err)
+	require.Equal(t, a.height, 21)
 
-	err = a.Set(ctx, MaxIndex+1, cborstr("what is up 2"))
+	err = a.Set(ctx, MaxIndex+1, cborstr("what is up"))
 	require.Error(t, err)
+
+	err = a.Set(ctx, MaxIndex-1, cborstr("what is up"))
+	require.NoError(t, err)
 
 	c, err := a.Flush(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	assert.Equal(t, "bafy2bzacebggnpdo4sclwgg3rzewhgoxppjmkhyr6anq3adk24dlnmcfu5mty", c.String())
-	assert.Equal(t, bsStats{r: 0, w: 22, br: 0, bw: 1030}, trackingBs.stats)
+	assert.Equal(t, "bafy2bzacecl3zuubhdvkojg6uhbu4mebaehx554q6algfjitqiivvnrqprkxo", c.String())
+	assert.Equal(t, bsStats{r: 0, w: 22, br: 0, bw: 1039}, trackingBs.stats)
+	t.Fatal("here")
 }
 func TestMaxRange11(t *testing.T) {
 	ctx := context.Background()
@@ -1009,6 +1014,8 @@ func TestRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	a, err := NewAMT(bs)
 	require.NoError(t, err)
+	emptyCid, err := a.Flush(ctx)
+	require.NoError(t, err)
 
 	k := uint64(100000)
 	assertSet(t, a, k, "foo")
@@ -1017,34 +1024,10 @@ func TestRoundTrip(t *testing.T) {
 	c, err := a.Flush(ctx)
 	require.NoError(t, err)
 
-	// // TODO fix this, this is testing locked in bug functionality
-	// // require.Equal(t, emptyCid, c)
-	// assert.Equal(t, "bafy2bzacedswlcz5ddgqnyo3sak3jmhmkxashisnlpq6ujgyhe4mlobzpnhs6", emptyCid.String())
-	// assert.Equal(t, "bafy2bzacec3ltjhtro3i4usbev24phgv6hb4fbfdaa2lxid4uod3zw4v3uce6", c.String())
-	// assert.Equal(t, bsStats{r: 0, w: 2, br: 0, bw: 16}, trackingBs.stats)
-
-	// // * This is just testing the bug functionality, remove if bug removed
-	// newAmt, err := LoadAMT(ctx, bs, c)
-	// if err != nil {
-	// 	t.Fatal(err)
-	// }
-	// assertSet(t, newAmt, 9, "foo")
-	// assertGet(ctx, t, newAmt, 9, "foo")
-	// assert.Equal(t, uint64(5), newAmt.height)
-	// assertSet(t, newAmt, 66, "bar")
-	// assertGet(ctx, t, newAmt, 66, "bar")
-	// assert.Equal(t, uint64(5), newAmt.height)
-	// assertSet(t, newAmt, 515, "baz")
-	// assertGet(ctx, t, newAmt, 515, "baz")
-	// assert.Equal(t, uint64(5), newAmt.height)
-
-	// assertDelete(t, newAmt, 9)
-	// assert.Equal(t, uint64(3), newAmt.height)
-	// assertDelete(t, newAmt, 515)
-	// assert.Equal(t, uint64(2), newAmt.height)
-
+	require.Equal(t, emptyCid, c)
+	assert.Equal(t, "bafy2bzacedijw74yui7otvo63nfl3hdq2vdzuy7wx2tnptwed6zml4vvz7wee", emptyCid.String())
 	assert.Equal(t, "bafy2bzacedijw74yui7otvo63nfl3hdq2vdzuy7wx2tnptwed6zml4vvz7wee", c.String())
-	assert.Equal(t, bsStats{r: 0, w: 1, br: 0, bw: 9}, trackingBs.stats)
+	assert.Equal(t, bsStats{r: 0, w: 2, br: 0, bw: 18}, trackingBs.stats)
 }
 func TestBadBitfield(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
