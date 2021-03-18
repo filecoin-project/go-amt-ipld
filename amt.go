@@ -4,120 +4,117 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
+	"sort"
 
 	cid "github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
-	logging "github.com/ipfs/go-log"
 	cbg "github.com/whyrusleeping/cbor-gen"
+
+	"github.com/filecoin-project/go-amt-ipld/v3/internal"
 )
 
-var log = logging.Logger("amt")
+// MaxIndex is the maximum index for elements in the AMT. This MaxUint64-1 so we
+// don't overflow MaxUint64 when computing the length.
+const MaxIndex = math.MaxUint64 - 1
 
-const (
-	// Width must be a power of 2. We set this to 8.
-	maxIndexBits = 63
-	widthBits    = 3
-	width        = 1 << widthBits             // 8
-	bitfieldSize = 1                          // ((width - 1) >> 3) + 1
-	maxHeight    = maxIndexBits/widthBits - 1 // 20 (because the root is at height 0).
-)
-
-// MaxIndex is the maximum index for elements in the AMT. This is currently 1^63
-// (max int) because the width is 8. That means every "level" consumes 3 bits
-// from the index, and 63/3 is a nice even 21
-const MaxIndex = uint64(1<<maxIndexBits) - 1
-
+// Root is described in more detail in its internal serialized form,
+// internal.Root
 type Root struct {
-	Height uint64
-	Count  uint64
-	Node   Node
+	bitWidth uint
+	height   int
+	count    uint64
+
+	node *node
 
 	store cbor.IpldStore
 }
 
-type Node struct {
-	Bmap   [bitfieldSize]byte
-	Links  []cid.Cid
-	Values []*cbg.Deferred
-
-	expLinks []cid.Cid
-	expVals  []*cbg.Deferred
-	cache    []*Node
-}
-
-func NewAMT(bs cbor.IpldStore) *Root {
-	return &Root{
-		store: bs,
+// NewAMT creates a new, empty AMT root with the given IpldStore and options.
+func NewAMT(bs cbor.IpldStore, opts ...Option) (*Root, error) {
+	cfg := defaultConfig()
+	for _, opt := range opts {
+		if err := opt(cfg); err != nil {
+			return nil, err
+		}
 	}
+
+	return &Root{
+		bitWidth: cfg.bitWidth,
+		store:    bs,
+		node:     new(node),
+	}, nil
 }
 
-func LoadAMT(ctx context.Context, bs cbor.IpldStore, c cid.Cid) (*Root, error) {
-	var r Root
+// LoadAMT loads an existing AMT from the given IpldStore using the given
+// root CID. An error will be returned where the AMT identified by the CID
+// does not exist within the IpldStore. If the given options, or their defaults,
+// do not match the AMT found at the given CID, an error will be returned.
+func LoadAMT(ctx context.Context, bs cbor.IpldStore, c cid.Cid, opts ...Option) (*Root, error) {
+	cfg := defaultConfig()
+	for _, opt := range opts {
+		if err := opt(cfg); err != nil {
+			return nil, err
+		}
+	}
+
+	var r internal.Root
 	if err := bs.Get(ctx, c, &r); err != nil {
 		return nil, err
 	}
-	if r.Height > maxHeight {
-		return nil, fmt.Errorf("failed to load AMT: height out of bounds: %d > %d", r.Height, maxHeight)
+
+	// Check the bitwidth but don't rely on it. We may add an option in the
+	// future to just discover the bitwidth from the AMT, but we need to be
+	// careful to not just trust the value.
+	if r.BitWidth != uint64(cfg.bitWidth) {
+		return nil, fmt.Errorf("expected bitwidth %d but AMT has bitwidth %d", cfg.bitWidth, r.BitWidth)
 	}
 
-	r.store = bs
-
-	return &r, nil
-}
-
-func (r *Root) Set(ctx context.Context, i uint64, val interface{}) error {
-	if i > MaxIndex {
-		return fmt.Errorf("index %d is out of range for the amt", i)
+	// Make sure the height is sane to prevent any integer overflows later
+	// (e.g., height+1). While MaxUint64-1 would solve the "+1" issue, we
+	// might as well use 64 because the height cannot be greater than 62
+	// (min width = 2, 2**64 == max elements).
+	if r.Height > 64 {
+		return nil, fmt.Errorf("height greater than 64: %d", r.Height)
 	}
 
-	var b []byte
-	if m, ok := val.(cbg.CBORMarshaler); ok {
-		buf := new(bytes.Buffer)
-		if err := m.MarshalCBOR(buf); err != nil {
-			return err
-		}
-		b = buf.Bytes()
-	} else {
-		var err error
-		b, err = cbor.DumpObject(val)
-		if err != nil {
-			return err
-		}
+	maxNodes := nodesForHeight(cfg.bitWidth, int(r.Height+1))
+	// nodesForHeight saturates. If "max nodes" is max uint64, the maximum
+	// number of nodes at the previous level muss be less. This is the
+	// simplest way to check to see if the height is sane.
+	if maxNodes == math.MaxUint64 && nodesForHeight(cfg.bitWidth, int(r.Height)) == math.MaxUint64 {
+		return nil, fmt.Errorf("failed to load AMT: height %d out of bounds", r.Height)
 	}
 
-	for i >= nodesForHeight(int(r.Height)+1) {
-		if !r.Node.empty() {
-			if err := r.Node.Flush(ctx, r.store, int(r.Height)); err != nil {
-				return err
-			}
-
-			c, err := r.store.Put(ctx, &r.Node)
-			if err != nil {
-				return err
-			}
-
-			r.Node = Node{
-				Bmap:  [...]byte{0x01},
-				Links: []cid.Cid{c},
-			}
-		}
-		r.Height++
+	// If max nodes is less than the count, something is wrong.
+	if maxNodes < r.Count {
+		return nil, fmt.Errorf(
+			"failed to load AMT: not tall enough (%d) for count (%d)", r.Height, r.Count,
+		)
 	}
 
-	addVal, err := r.Node.set(ctx, r.store, int(r.Height), i, &cbg.Deferred{Raw: b})
+	nd, err := newNode(r.Node, cfg.bitWidth, r.Height == 0, r.Height == 0)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	if addVal {
-		r.Count++
-	}
-
-	return nil
+	return &Root{
+		bitWidth: cfg.bitWidth,
+		height:   int(r.Height),
+		count:    r.Count,
+		node:     nd,
+		store:    bs,
+	}, nil
 }
 
-func FromArray(ctx context.Context, bs cbor.IpldStore, vals []cbg.CBORMarshaler) (cid.Cid, error) {
-	r := NewAMT(bs)
+// FromArray creates a new AMT and performs a BatchSet on it using the vals and
+// options provided. Indexes from the array are used as the indexes for the same
+// values in the AMT.
+func FromArray(ctx context.Context, bs cbor.IpldStore, vals []cbg.CBORMarshaler, opts ...Option) (cid.Cid, error) {
+	r, err := NewAMT(bs, opts...)
+	if err != nil {
+		return cid.Undef, err
+	}
 	if err := r.BatchSet(ctx, vals); err != nil {
 		return cid.Undef, err
 	}
@@ -125,6 +122,83 @@ func FromArray(ctx context.Context, bs cbor.IpldStore, vals []cbg.CBORMarshaler)
 	return r.Flush(ctx)
 }
 
+// Set will add or update entry at index i with value val. The index must be
+// within lower than MaxIndex.
+//
+// Where val has a compatible CBORMarshaler() it will be used to serialize the
+// object into CBOR. Otherwise the generic go-ipld-cbor DumbObject() will be
+// used.
+//
+// Setting a new index that is greater than the current capacity of the
+// existing AMT structure will result in the creation of additional nodes to
+// form a structure of enough height to contain the new index.
+//
+// The height required to store any given index can be calculated by finding
+// the lowest (width^(height+1) - 1) that is higher than the index. For example,
+// a height of 1 on an AMT with a width of 8 (bitWidth of 3) can fit up to
+// indexes of 8^2 - 1, or 63. At height 2, indexes up to 511 can be stored. So a
+// Set operation for an index between 64 and 511 will require that the AMT have
+// a height of at least 3. Where an AMT has a height less than 3, additional
+// nodes will be added until the height is 3.
+func (r *Root) Set(ctx context.Context, i uint64, val cbg.CBORMarshaler) error {
+	if i > MaxIndex {
+		return fmt.Errorf("index %d is out of range for the amt", i)
+	}
+
+	var d cbg.Deferred
+	if val == nil {
+		d.Raw = cbg.CborNull
+	} else {
+		valueBuf := new(bytes.Buffer)
+		if err := val.MarshalCBOR(valueBuf); err != nil {
+			return err
+		}
+		d.Raw = valueBuf.Bytes()
+	}
+
+	// where the index is greater than the number of elements we can fit into the
+	// current AMT, grow it until it will fit.
+	for i >= nodesForHeight(r.bitWidth, r.height+1) {
+		// if we have existing data, perform the re-height here by pushing down
+		// the existing tree into the left-most portion of a new root
+		if !r.node.empty() {
+			nd := r.node
+			// since all our current elements fit in the old height, we _know_ that
+			// they will all sit under element [0] of this new node.
+			r.node = &node{links: make([]*link, 1<<r.bitWidth)}
+			r.node.links[0] = &link{
+				dirty:  true,
+				cached: nd,
+			}
+		}
+		// else we still need to add new nodes to form the right height, but we can
+		// defer that to our set() call below which will lazily create new nodes
+		// where it expects there to be some
+		r.height++
+	}
+
+	addVal, err := r.node.set(ctx, r.store, r.bitWidth, r.height, i, &d)
+	if err != nil {
+		return err
+	}
+
+	if addVal {
+		// Something is wrong, so we'll just do our best to not overflow.
+		if r.count >= (MaxIndex - 1) {
+			return errInvalidCount
+		}
+		r.count++
+	}
+
+	return nil
+}
+
+// BatchSet takes an array of vals and performs a Set on each of them on an
+// existing AMT. Indexes from the array are used as indexes for the same values
+// in the AMT.
+//
+// This is currently a convenience method and does not perform optimizations
+// above iterative Set calls for each entry.
 func (r *Root) BatchSet(ctx context.Context, vals []cbg.CBORMarshaler) error {
 	// TODO: there are more optimized ways of doing this method
 	for i, v := range vals {
@@ -135,437 +209,147 @@ func (r *Root) BatchSet(ctx context.Context, vals []cbg.CBORMarshaler) error {
 	return nil
 }
 
-func (r *Root) Get(ctx context.Context, i uint64, out interface{}) error {
+// Get retrieves a value from index i.
+// If the index is set, returns true and, if the `out` parameter is not nil,
+// deserializes the value into that interface. Returns false if the index is not set.
+func (r *Root) Get(ctx context.Context, i uint64, out cbg.CBORUnmarshaler) (bool, error) {
 	if i > MaxIndex {
-		return fmt.Errorf("index %d is out of range for the amt", i)
+		return false, fmt.Errorf("index %d is out of range for the amt", i)
 	}
 
-	if i >= nodesForHeight(int(r.Height+1)) {
-		return &ErrNotFound{Index: i}
+	// easy shortcut case, index is too large for our height, don't bother looking
+	// further
+	if i >= nodesForHeight(r.bitWidth, r.height+1) {
+		return false, nil
 	}
-	return r.Node.get(ctx, r.store, int(r.Height), i, out)
+	return r.node.get(ctx, r.store, r.bitWidth, r.height, i, out)
 }
 
-func (n *Node) get(ctx context.Context, bs cbor.IpldStore, height int, i uint64, out interface{}) error {
-	subi := i / nodesForHeight(height)
-	if !n.isSet(subi) {
-		return &ErrNotFound{i}
-	}
-	if height == 0 {
-		if err := n.expandValues(); err != nil {
-			return err
-		}
-
-		d := n.expVals[i]
-
-		if um, ok := out.(cbg.CBORUnmarshaler); ok {
-			return um.UnmarshalCBOR(bytes.NewReader(d.Raw))
-		} else {
-			return cbor.DecodeInto(d.Raw, out)
-		}
-	}
-
-	subn, err := n.loadNode(ctx, bs, subi, false)
-	if err != nil {
-		return err
-	}
-
-	return subn.get(ctx, bs, height-1, i%nodesForHeight(height), out)
-}
-
-func (r *Root) BatchDelete(ctx context.Context, indices []uint64) error {
+// BatchDelete performs a bulk Delete operation on an array of indices. Each
+// index in the given indices array will be removed from the AMT, if it is present.
+// If `strict` is true, all indices are expected to be present, and this will return an error
+// if one is not found.
+//
+// Returns true if the AMT was modified as a result of this operation.
+//
+// There is no special optimization applied to this method, it is simply a
+// convenience wrapper around Delete for an array of indices.
+func (r *Root) BatchDelete(ctx context.Context, indices []uint64, strict bool) (modified bool, err error) {
 	// TODO: theres a faster way of doing this, but this works for now
+
+	// Sort by index so we can safely implement these optimizations in the future.
+	less := func(i, j int) bool { return indices[i] < indices[j] }
+	if !sort.SliceIsSorted(indices, less) {
+		// Copy first so we don't modify our inputs.
+		indices = append(indices[0:0:0], indices...)
+		sort.Slice(indices, less)
+	}
+
 	for _, i := range indices {
-		if err := r.Delete(ctx, i); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (r *Root) Delete(ctx context.Context, i uint64) error {
-	if i > MaxIndex {
-		return fmt.Errorf("index %d is out of range for the amt", i)
-	}
-	//fmt.Printf("i: %d, h: %d, nfh: %d\n", i, r.Height, nodesForHeight(int(r.Height)))
-	if i >= nodesForHeight(int(r.Height+1)) {
-		return &ErrNotFound{i}
-	}
-
-	if err := r.Node.delete(ctx, r.store, int(r.Height), i); err != nil {
-		return err
-	}
-	r.Count--
-
-	for r.Node.Bmap[0] == 1 && r.Height > 0 {
-		sub, err := r.Node.loadNode(ctx, r.store, 0, false)
+		found, err := r.Delete(ctx, i)
 		if err != nil {
-			return err
-		}
-
-		r.Node = *sub
-		r.Height--
-	}
-
-	return nil
-}
-
-func (n *Node) delete(ctx context.Context, bs cbor.IpldStore, height int, i uint64) error {
-	subi := i / nodesForHeight(height)
-	if !n.isSet(subi) {
-		return &ErrNotFound{i}
-	}
-	if height == 0 {
-		if err := n.expandValues(); err != nil {
-			return err
-		}
-
-		n.expVals[i] = nil
-		n.clearBit(i)
-
-		return nil
-	}
-
-	subn, err := n.loadNode(ctx, bs, subi, false)
-	if err != nil {
-		return err
-	}
-
-	if err := subn.delete(ctx, bs, height-1, i%nodesForHeight(height)); err != nil {
-		return err
-	}
-
-	if subn.empty() {
-		n.clearBit(subi)
-		n.cache[subi] = nil
-		n.expLinks[subi] = cid.Undef
-	}
-
-	return nil
-}
-
-// Subtract removes all elements of 'or' from 'r'
-func (r *Root) Subtract(ctx context.Context, or *Root) error {
-	// TODO: as with other methods, there should be an optimized way of doing this
-	return or.ForEach(ctx, func(i uint64, _ *cbg.Deferred) error {
-		return r.Delete(ctx, i)
-	})
-}
-
-func (r *Root) ForEach(ctx context.Context, cb func(uint64, *cbg.Deferred) error) error {
-	return r.Node.forEachAt(ctx, r.store, int(r.Height), 0, 0, cb)
-}
-
-func (r *Root) ForEachAt(ctx context.Context, start uint64, cb func(uint64, *cbg.Deferred) error) error {
-	return r.Node.forEachAt(ctx, r.store, int(r.Height), start, 0, cb)
-}
-
-func (n *Node) forEachAt(ctx context.Context, bs cbor.IpldStore, height int, start, offset uint64, cb func(uint64, *cbg.Deferred) error) error {
-	if height == 0 {
-		if err := n.expandValues(); err != nil {
-			return err
-		}
-
-		for i, v := range n.expVals {
-			if v != nil {
-				ix := offset + uint64(i)
-				if ix < start {
-					continue
-				}
-
-				if err := cb(offset+uint64(i), v); err != nil {
-					return err
-				}
-			}
-		}
-
-		return nil
-	}
-
-	if n.cache == nil {
-		if err := n.expandLinks(); err != nil {
-			return err
-		}
-	}
-
-	subCount := nodesForHeight(height)
-	for i, v := range n.expLinks {
-		var sub Node
-		if n.cache[i] != nil {
-			sub = *n.cache[i]
-		} else if v != cid.Undef {
-			if err := bs.Get(ctx, v, &sub); err != nil {
-				return err
-			}
-		} else {
-			continue
-		}
-
-		offs := offset + (uint64(i) * subCount)
-		nextOffs := offs + subCount
-		if start >= nextOffs {
-			continue
-		}
-
-		if err := sub.forEachAt(ctx, bs, height-1, start, offs, cb); err != nil {
-			return err
-		}
-	}
-	return nil
-
-}
-
-func (r *Root) FirstSetIndex(ctx context.Context) (uint64, error) {
-	return r.Node.firstSetIndex(ctx, r.store, int(r.Height))
-}
-
-var errNoVals = fmt.Errorf("no values")
-
-func (n *Node) firstSetIndex(ctx context.Context, bs cbor.IpldStore, height int) (uint64, error) {
-	if height == 0 {
-		if err := n.expandValues(); err != nil {
-			return 0, err
-		}
-		for i, v := range n.expVals {
-			if v != nil {
-				return uint64(i), nil
-			}
-		}
-		// Would be really weird if we ever actually hit this
-		return 0, errNoVals
-	}
-
-	if n.cache == nil {
-		if err := n.expandLinks(); err != nil {
-			return 0, err
-		}
-	}
-
-	for i := 0; i < width; i++ {
-		if n.isSet(uint64(i)) {
-			subn, err := n.loadNode(ctx, bs, uint64(i), false)
-			if err != nil {
-				return 0, err
-			}
-
-			ix, err := subn.firstSetIndex(ctx, bs, height-1)
-			if err != nil {
-				return 0, err
-			}
-
-			subCount := nodesForHeight(height)
-			return ix + (uint64(i) * subCount), nil
-		}
-	}
-
-	return 0, errNoVals
-}
-
-func (n *Node) expandValues() error {
-	if len(n.expVals) == 0 {
-		n.expVals = make([]*cbg.Deferred, width)
-		i := 0
-		for x := uint64(0); x < width; x++ {
-			if n.isSet(x) {
-				if i >= len(n.Values) {
-					n.expVals = nil
-					return fmt.Errorf("bitfield does not match values")
-				}
-				n.expVals[x] = n.Values[i]
-				i++
-			}
-		}
-	}
-	return nil
-}
-
-func (n *Node) set(ctx context.Context, bs cbor.IpldStore, height int, i uint64, val *cbg.Deferred) (bool, error) {
-	//nfh := nodesForHeight(height)
-	//fmt.Printf("[set] h: %d, i: %d, subi: %d\n", height, i, i/nfh)
-	if height == 0 {
-		if err := n.expandValues(); err != nil {
 			return false, err
+		} else if strict && !found {
+			return false, fmt.Errorf("no such index %d", i)
 		}
-		alreadySet := n.isSet(i)
-		n.expVals[i] = val
-		n.setBit(i)
+		modified = modified || found
+	}
+	return modified, nil
+}
 
-		return !alreadySet, nil
+// Delete removes an index from the AMT.
+// Returns true if the index was present and removed, or false if the index
+// was not set.
+//
+// If this delete operation leaves nodes with no remaining elements, the height
+// will be reduced to fit the maximum remaining index, leaving the AMT in
+// canonical form for the given set of data that it contains.
+func (r *Root) Delete(ctx context.Context, i uint64) (bool, error) {
+	if i > MaxIndex {
+		return false, fmt.Errorf("index %d is out of range for the amt", i)
 	}
 
-	nfh := nodesForHeight(height)
+	// shortcut, index is greater than what we hold so we know it's not there
+	if i >= nodesForHeight(r.bitWidth, r.height+1) {
+		return false, nil
+	}
 
-	subn, err := n.loadNode(ctx, bs, i/nfh, true)
+	found, err := r.node.delete(ctx, r.store, r.bitWidth, r.height, i)
+	if err != nil {
+		return false, err
+	} else if !found {
+		return false, nil
+	}
+
+	// The AMT invariant dictates that for any non-empty AMT, the root node must
+	// not address only its left-most child node. Where a deletion has created a
+	// state where the current root node only consists of a link to the left-most
+	// child and no others, that child node must become the new root node (i.e.
+	// the height is reduced by 1). We perform the same check on the new root node
+	// such that we reduce the AMT to canonical form for this data set.
+	// In the extreme case, it is possible to perform a collapse from a large
+	// `height` to height=0 where the index being removed is very large and there
+	// remains no other indexes or the remaining indexes are in the range of 0 to
+	// bitWidth^8.
+	// See node.collapse() for more notes.
+	newHeight, err := r.node.collapse(ctx, r.store, r.bitWidth, r.height)
 	if err != nil {
 		return false, err
 	}
+	r.height = newHeight
 
-	return subn.set(ctx, bs, height-1, i%nfh, val)
+	// Something is very wrong but there's not much we can do. So we perform
+	// the operation and then tell the user that something is wrong.
+	if r.count == 0 {
+		return false, errInvalidCount
+	}
+
+	r.count--
+	return true, nil
 }
 
-func (n *Node) isSet(i uint64) bool {
-	if i > 7 {
-		panic("cant deal with wider arrays yet")
-	}
-
-	return len(n.Bmap) != 0 && n.Bmap[0]&byte(1<<i) != 0
+// ForEach iterates over the entire AMT and calls the cb function for each
+// entry found in the leaf nodes. The callback will receive the index and the
+// value of each element.
+func (r *Root) ForEach(ctx context.Context, cb func(uint64, *cbg.Deferred) error) error {
+	return r.node.forEachAt(ctx, r.store, r.bitWidth, r.height, 0, 0, cb)
 }
 
-func (n *Node) setBit(i uint64) {
-	if i > 7 {
-		panic("cant deal with wider arrays yet")
-	}
-
-	if len(n.Bmap) == 0 {
-		n.Bmap = [...]byte{0}
-	}
-
-	n.Bmap[0] = n.Bmap[0] | byte(1<<i)
+// ForEachAt iterates over the AMT beginning from the given start index. See
+// ForEach for more details.
+func (r *Root) ForEachAt(ctx context.Context, start uint64, cb func(uint64, *cbg.Deferred) error) error {
+	return r.node.forEachAt(ctx, r.store, r.bitWidth, r.height, start, 0, cb)
 }
 
-func (n *Node) clearBit(i uint64) {
-	if i > 7 {
-		panic("cant deal with wider arrays yet")
-	}
-
-	if len(n.Bmap) == 0 {
-		panic("invariant violated: called clear bit on empty node")
-	}
-
-	mask := byte(0xff - (1 << i))
-
-	n.Bmap[0] = n.Bmap[0] & mask
+// FirstSetIndex finds the lowest index in this AMT that has a value set for
+// it. If this operation is called on an empty AMT, an ErrNoValues will be
+// returned.
+func (r *Root) FirstSetIndex(ctx context.Context) (uint64, error) {
+	return r.node.firstSetIndex(ctx, r.store, r.bitWidth, r.height)
 }
 
-func (n *Node) expandLinks() error {
-	n.cache = make([]*Node, width)
-	n.expLinks = make([]cid.Cid, width)
-	i := 0
-	for x := uint64(0); x < width; x++ {
-		if n.isSet(x) {
-			if i >= len(n.Links) {
-				n.cache = nil
-				n.expLinks = nil
-				return fmt.Errorf("bitfield does not match links")
-			}
-			n.expLinks[x] = n.Links[i]
-			i++
-		}
-	}
-	return nil
-}
-
-func (n *Node) loadNode(ctx context.Context, bs cbor.IpldStore, i uint64, create bool) (*Node, error) {
-	if n.cache == nil {
-		if err := n.expandLinks(); err != nil {
-			return nil, err
-		}
-	} else {
-		if n := n.cache[i]; n != nil {
-			return n, nil
-		}
-	}
-
-	var subn *Node
-	if n.isSet(i) {
-		var sn Node
-		if err := bs.Get(ctx, n.expLinks[i], &sn); err != nil {
-			return nil, err
-		}
-
-		subn = &sn
-	} else {
-		if create {
-			subn = &Node{}
-			n.setBit(i)
-		} else {
-			return nil, fmt.Errorf("no node found at (sub)index %d", i)
-		}
-	}
-	n.cache[i] = subn
-
-	return subn, nil
-}
-
-func nodesForHeight(height int) uint64 {
-	heightLogTwo := uint64(widthBits * height)
-	if heightLogTwo >= 64 {
-		// Should never happen. Max height is checked at all entry points.
-		panic("height overflow")
-	}
-	return 1 << heightLogTwo
-}
-
+// Flush saves any unsaved node data and recompacts the in-memory forms of each
+// node where they have been expanded for operational use.
 func (r *Root) Flush(ctx context.Context) (cid.Cid, error) {
-	if err := r.Node.Flush(ctx, r.store, int(r.Height)); err != nil {
+	nd, err := r.node.flush(ctx, r.store, r.bitWidth, r.height)
+	if err != nil {
 		return cid.Undef, err
 	}
-
-	return r.store.Put(ctx, r)
-}
-
-func (n *Node) empty() bool {
-	return len(n.Bmap) == 0 || n.Bmap[0] == 0
-}
-
-func (n *Node) Flush(ctx context.Context, bs cbor.IpldStore, depth int) error {
-	if depth == 0 {
-		if len(n.expVals) == 0 {
-			return nil
-		}
-		n.Bmap = [...]byte{0}
-		n.Values = nil
-		for i := uint64(0); i < width; i++ {
-			v := n.expVals[i]
-			if v != nil {
-				n.Values = append(n.Values, v)
-				n.setBit(i)
-			}
-		}
-		return nil
+	root := internal.Root{
+		BitWidth: uint64(r.bitWidth),
+		Height:   uint64(r.height),
+		Count:    r.count,
+		Node:     *nd,
 	}
-
-	if len(n.expLinks) == 0 {
-		// nothing to do!
-		return nil
-	}
-
-	n.Bmap = [...]byte{0}
-	n.Links = nil
-
-	for i := uint64(0); i < width; i++ {
-		subn := n.cache[i]
-		if subn != nil {
-			if err := subn.Flush(ctx, bs, depth-1); err != nil {
-				return err
-			}
-
-			c, err := bs.Put(ctx, subn)
-			if err != nil {
-				return err
-			}
-			n.expLinks[i] = c
-		}
-
-		l := n.expLinks[i]
-		if l != cid.Undef {
-			n.Links = append(n.Links, l)
-			n.setBit(i)
-		}
-	}
-
-	return nil
+	return r.store.Put(ctx, &root)
 }
 
-type ErrNotFound struct {
-	Index uint64
-}
-
-func (e ErrNotFound) Error() string {
-	return fmt.Sprintf("Index %d not found in AMT", e.Index)
-}
-
-func (e ErrNotFound) NotFound() bool {
-	return true
+// Len returns the "Count" property that is stored in the root of this AMT.
+// It's correctness is only guaranteed by the consistency of the build of the
+// AMT (i.e. this code). A "secure" count would require iterating the entire
+// tree, but if all nodes are part of a trusted structure (e.g. one where we
+// control the entire build, or verify all incoming blocks from untrusted
+// sources) then we ought to be able to say "count" is correct.
+func (r *Root) Len() uint64 {
+	return r.count
 }
