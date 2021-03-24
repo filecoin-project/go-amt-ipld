@@ -1,10 +1,12 @@
 package amt
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"testing"
 
+	cbor "github.com/ipfs/go-ipld-cbor"
 	"github.com/stretchr/testify/require"
 	cbg "github.com/whyrusleeping/cbor-gen"
 )
@@ -58,4 +60,22 @@ func (c *CborByteArray) UnmarshalCBOR(r io.Reader) error {
 func cborstr(s string) *CborByteArray {
 	v := CborByteArray(s)
 	return &v
+}
+
+func TestStringCborRoundtrip(t *testing.T) {
+	input := "foo"
+
+	val := cborstr(input)
+	valueBuf := new(bytes.Buffer)
+	if err := val.MarshalCBOR(valueBuf); err != nil {
+		t.Fatal(err)
+	}
+	encoded := valueBuf.Bytes()
+
+	var actual CborByteArray
+	cbor.DecodeInto(encoded, &actual)
+
+	if string(actual) != input {
+		t.Errorf("got %s, wanted %s", actual, input)
+	}
 }

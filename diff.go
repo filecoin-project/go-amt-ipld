@@ -11,7 +11,7 @@ import (
 	"github.com/ipfs/go-cid"
 
 	cbor "github.com/ipfs/go-ipld-cbor"
-	typegen "github.com/whyrusleeping/cbor-gen"
+	cbg "github.com/whyrusleeping/cbor-gen"
 )
 
 // ChangeType denotes type of change in Change
@@ -29,8 +29,8 @@ const (
 type Change struct {
 	Type   ChangeType
 	Key    uint64
-	Before *typegen.Deferred
-	After  *typegen.Deferred
+	Before *cbg.Deferred
+	After  *cbg.Deferred
 }
 
 func (ch Change) String() string {
@@ -50,21 +50,20 @@ func Diff(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur cid.Cid) 
 		return nil, xerrors.Errorf("loading current root: %w", err)
 	}
 
-	return diffNode(ctx, prevBs, curBs, &prevAmt.Node, &curAmt.Node, int(prevAmt.Height), int(curAmt.Height), 0)
+	return diffNode(ctx, prevBs, curBs, prevAmt.node, curAmt.node, int(prevAmt.height), int(curAmt.height), prevAmt.bitWidth, curAmt.bitWidth, 0)
 }
 
-func diffNode(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur *Node, prevHeight, curHeight int, offset uint64) ([]*Change, error) {
-
+func diffNode(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur *node, prevHeight, curHeight int, prevBitWidth, curBitWidth uint, offset uint64) ([]*Change, error) {
 	if prev == nil && cur == nil {
 		return nil, nil
 	}
 
 	if prev == nil {
-		return addAll(ctx, curBs, cur, curHeight, offset)
+		return addAll(ctx, curBs, cur, curBitWidth, curHeight, offset)
 	}
 
 	if cur == nil {
-		return removeAll(ctx, prevBs, prev, prevHeight, offset)
+		return removeAll(ctx, prevBs, prev, prevBitWidth, prevHeight, offset)
 	}
 
 	if prevHeight == 0 && curHeight == 0 {
@@ -74,36 +73,29 @@ func diffNode(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur *Node
 	changes := make([]*Change, 0)
 
 	if curHeight > prevHeight {
-		if cur.cache == nil {
-			if err := cur.expandLinks(); err != nil {
-				return nil, err
-			}
-		}
+		subCount := nodesForHeight(curBitWidth, curHeight)
 
-		subCount := nodesForHeight(curHeight)
-		for i, v := range cur.expLinks {
-			var sub Node
-			if cur.cache[i] != nil {
-				sub = *cur.cache[i]
-			} else if v != cid.Undef {
-				if err := curBs.Get(ctx, v, &sub); err != nil {
-					return nil, err
-				}
-			} else {
+		// TODO: cur.links may be nil
+		for i, ln := range cur.links {
+			if ln == nil || ln.cid == cid.Undef {
 				continue
 			}
 
-			offs := offset + (uint64(i) * subCount)
+			subn, err := ln.load(ctx, curBs, curBitWidth, curHeight-1)
+			if err != nil {
+				return nil, err
+			}
 
+			offs := offset + (uint64(i) * subCount)
 			if i == 0 {
-				cs, err := diffNode(ctx, prevBs, curBs, prev, &sub, 0, curHeight-1, offs)
+				cs, err := diffNode(ctx, prevBs, curBs, prev, subn, prevHeight, curHeight-1, prevBitWidth, curBitWidth, offs)
 				if err != nil {
 					return nil, err
 				}
 
 				changes = append(changes, cs...)
 			} else {
-				cs, err := addAll(ctx, curBs, &sub, curHeight-1, offs)
+				cs, err := addAll(ctx, curBs, subn, curBitWidth, curHeight-1, offs)
 				if err != nil {
 					return nil, err
 				}
@@ -116,36 +108,29 @@ func diffNode(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur *Node
 	}
 
 	if prevHeight > curHeight {
-		if prev.cache == nil {
-			if err := prev.expandLinks(); err != nil {
-				return nil, err
-			}
-		}
-
-		subCount := nodesForHeight(prevHeight)
-		for i, v := range prev.expLinks {
-			var sub Node
-			if prev.cache[i] != nil {
-				sub = *prev.cache[i]
-			} else if v != cid.Undef {
-				if err := prevBs.Get(ctx, v, &sub); err != nil {
-					return nil, err
-				}
-			} else {
+		subCount := nodesForHeight(prevBitWidth, prevHeight)
+		// TODO: prev.links may be nil
+		for i, ln := range prev.links {
+			if ln == nil || ln.cid == cid.Undef {
 				continue
+			}
+
+			subn, err := ln.load(ctx, prevBs, prevBitWidth, prevHeight-1)
+			if err != nil {
+				return nil, err
 			}
 
 			offs := offset + (uint64(i) * subCount)
 
 			if i == 0 {
-				cs, err := diffNode(ctx, prevBs, curBs, &sub, cur, prevHeight-1, curHeight, offs)
+				cs, err := diffNode(ctx, prevBs, curBs, subn, cur, prevHeight-1, curHeight, prevBitWidth, curBitWidth, offs)
 				if err != nil {
 					return nil, err
 				}
 
 				changes = append(changes, cs...)
 			} else {
-				cs, err := removeAll(ctx, prevBs, &sub, prevHeight-1, offs)
+				cs, err := removeAll(ctx, prevBs, subn, prevBitWidth, prevHeight-1, offs)
 				if err != nil {
 					return nil, err
 				}
@@ -162,41 +147,79 @@ func diffNode(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur *Node
 		return nil, fmt.Errorf("comparing non-leaf nodes of unequal heights (%d, %d)", prevHeight, curHeight)
 	}
 
-	if cur.cache == nil {
-		if err := cur.expandLinks(); err != nil {
-			return nil, err
-		}
+	if len(prev.links) != len(cur.links) {
+		return nil, fmt.Errorf("nodes have different numbers of links (prev=%d, cur=%d)", len(prev.links), len(cur.links))
 	}
 
-	if prev.cache == nil {
-		if err := prev.expandLinks(); err != nil {
-			return nil, err
-		}
+	if prev.links == nil || cur.links == nil {
+		return nil, fmt.Errorf("nodes have no links")
 	}
 
-	subCount := nodesForHeight(prevHeight)
-	for i := range prev.expLinks {
-		var prevSub Node
-		if prev.cache[i] != nil {
-			prevSub = *prev.cache[i]
-		} else if prev.expLinks[i] != cid.Undef {
-			if err := prevBs.Get(ctx, prev.expLinks[i], &prevSub); err != nil {
-				return nil, err
-			}
+	subCount := nodesForHeight(prevBitWidth, prevHeight)
+	for i := range prev.links {
+		// Neither previous or current links are in use
+		if prev.links[i] == nil && cur.links[i] == nil {
+			continue
 		}
 
-		var curSub Node
-		if cur.cache[i] != nil {
-			curSub = *cur.cache[i]
-		} else if cur.expLinks[i] != cid.Undef {
-			if err := curBs.Get(ctx, cur.expLinks[i], &curSub); err != nil {
+		// Previous had link, current did not
+		if prev.links[i] != nil && cur.links[i] == nil {
+			if prev.links[i].cid == cid.Undef {
+				continue
+			}
+
+			subn, err := prev.links[i].load(ctx, prevBs, prevBitWidth, prevHeight-1)
+			if err != nil {
 				return nil, err
 			}
+
+			offs := offset + (uint64(i) * subCount)
+			cs, err := removeAll(ctx, prevBs, subn, prevBitWidth, prevHeight-1, offs)
+			if err != nil {
+				return nil, err
+			}
+
+			changes = append(changes, cs...)
+
+			continue
+		}
+
+		// Current has link, previous did not
+		if prev.links[i] == nil && cur.links[i] != nil {
+			if cur.links[i].cid == cid.Undef {
+				continue
+			}
+			subn, err := cur.links[i].load(ctx, curBs, curBitWidth, curHeight-1)
+			if err != nil {
+				return nil, err
+			}
+
+			offs := offset + (uint64(i) * subCount)
+			cs, err := addAll(ctx, curBs, subn, curBitWidth, curHeight-1, offs)
+			if err != nil {
+				return nil, err
+			}
+
+			changes = append(changes, cs...)
+
+			continue
+		}
+
+		// Both previous and current have links to diff
+
+		prevSubn, err := prev.links[i].load(ctx, prevBs, prevBitWidth, prevHeight-1)
+		if err != nil {
+			return nil, err
+		}
+
+		curSubn, err := cur.links[i].load(ctx, curBs, curBitWidth, curHeight-1)
+		if err != nil {
+			return nil, err
 		}
 
 		offs := offset + (uint64(i) * subCount)
 
-		cs, err := diffNode(ctx, prevBs, curBs, &prevSub, &curSub, prevHeight-1, curHeight-1, offs)
+		cs, err := diffNode(ctx, prevBs, curBs, prevSubn, curSubn, prevHeight-1, curHeight-1, prevBitWidth, curBitWidth, offs)
 		if err != nil {
 			return nil, err
 		}
@@ -207,9 +230,9 @@ func diffNode(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur *Node
 	return changes, nil
 }
 
-func addAll(ctx context.Context, bs cbor.IpldStore, node *Node, height int, offset uint64) ([]*Change, error) {
+func addAll(ctx context.Context, bs cbor.IpldStore, node *node, bitWidth uint, height int, offset uint64) ([]*Change, error) {
 	changes := make([]*Change, 0)
-	err := node.forEachAt(ctx, bs, height, 0, offset, func(index uint64, deferred *typegen.Deferred) error {
+	err := node.forEachAt(ctx, bs, bitWidth, height, 0, offset, func(index uint64, deferred *cbg.Deferred) error {
 		changes = append(changes, &Change{
 			Type:   Add,
 			Key:    index,
@@ -219,7 +242,6 @@ func addAll(ctx context.Context, bs cbor.IpldStore, node *Node, height int, offs
 
 		return nil
 	})
-
 	if err != nil {
 		return nil, err
 	}
@@ -227,10 +249,10 @@ func addAll(ctx context.Context, bs cbor.IpldStore, node *Node, height int, offs
 	return changes, nil
 }
 
-func removeAll(ctx context.Context, bs cbor.IpldStore, node *Node, height int, offset uint64) ([]*Change, error) {
+func removeAll(ctx context.Context, bs cbor.IpldStore, node *node, bitWidth uint, height int, offset uint64) ([]*Change, error) {
 	changes := make([]*Change, 0)
 
-	err := node.forEachAt(ctx, bs, height, 0, offset, func(index uint64, deferred *typegen.Deferred) error {
+	err := node.forEachAt(ctx, bs, bitWidth, height, 0, offset, func(index uint64, deferred *cbg.Deferred) error {
 		changes = append(changes, &Change{
 			Type:   Remove,
 			Key:    index,
@@ -240,7 +262,6 @@ func removeAll(ctx context.Context, bs cbor.IpldStore, node *Node, height int, o
 
 		return nil
 	})
-
 	if err != nil {
 		return nil, err
 	}
@@ -248,24 +269,16 @@ func removeAll(ctx context.Context, bs cbor.IpldStore, node *Node, height int, o
 	return changes, nil
 }
 
-func diffLeaves(prev, cur *Node, offset uint64) ([]*Change, error) {
-	if err := prev.expandValues(); err != nil {
-		return nil, err
-	}
-
-	if err := cur.expandValues(); err != nil {
-		return nil, err
-	}
-
-	if len(prev.expVals) != len(cur.expVals) {
-		return nil, fmt.Errorf("unexpected length of values %d and %d", len(prev.expVals), len(cur.expVals))
+func diffLeaves(prev, cur *node, offset uint64) ([]*Change, error) {
+	if len(prev.values) != len(cur.values) {
+		return nil, fmt.Errorf("node leaves have different numbers of values (prev=%d, cur=%d)", len(prev.values), len(cur.values))
 	}
 
 	changes := make([]*Change, 0)
-	for i, prevVal := range prev.expVals {
+	for i, prevVal := range prev.values {
 		index := offset + uint64(i)
 
-		curVal := cur.expVals[i]
+		curVal := cur.values[i]
 		if prevVal == nil && curVal == nil {
 			continue
 		}
@@ -300,6 +313,7 @@ func diffLeaves(prev, cur *Node, offset uint64) ([]*Change, error) {
 				After:  curVal,
 			})
 		}
+
 	}
 
 	return changes, nil
