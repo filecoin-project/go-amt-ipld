@@ -45,55 +45,84 @@ func Diff(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur cid.Cid) 
 		return nil, xerrors.Errorf("loading previous root: %w", err)
 	}
 
+	prevCtx := &nodeContext{
+		bs:       prevBs,
+		bitWidth: prevAmt.bitWidth,
+		height:   prevAmt.height,
+	}
+
 	curAmt, err := LoadAMT(ctx, curBs, cur)
 	if err != nil {
 		return nil, xerrors.Errorf("loading current root: %w", err)
 	}
 
-	return diffNode(ctx, prevBs, curBs, prevAmt.node, curAmt.node, int(prevAmt.height), int(curAmt.height), prevAmt.bitWidth, curAmt.bitWidth, 0)
+	curCtx := &nodeContext{
+		bs:       curBs,
+		bitWidth: curAmt.bitWidth,
+		height:   curAmt.height,
+	}
+
+	return diffNode(ctx, prevCtx, curCtx, prevAmt.node, curAmt.node, 0)
 }
 
-func diffNode(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur *node, prevHeight, curHeight int, prevBitWidth, curBitWidth uint, offset uint64) ([]*Change, error) {
+type nodeContext struct {
+	bs       cbor.IpldStore // store containining AMT data
+	bitWidth uint           // bit width of AMT
+	height   int            // height of node
+}
+
+// nodesAtHeight returns the number of nodes that can be held at the context height
+func (nc *nodeContext) nodesAtHeight() uint64 {
+	return nodesForHeight(nc.bitWidth, nc.height)
+}
+
+func diffNode(ctx context.Context, prevCtx, curCtx *nodeContext, prev, cur *node, offset uint64) ([]*Change, error) {
 	if prev == nil && cur == nil {
 		return nil, nil
 	}
 
 	if prev == nil {
-		return addAll(ctx, curBs, cur, curBitWidth, curHeight, offset)
+		return addAll(ctx, curCtx, cur, offset)
 	}
 
 	if cur == nil {
-		return removeAll(ctx, prevBs, prev, prevBitWidth, prevHeight, offset)
+		return removeAll(ctx, prevCtx, prev, offset)
 	}
 
-	if prevHeight == 0 && curHeight == 0 {
+	if prevCtx.height == 0 && curCtx.height == 0 {
 		return diffLeaves(prev, cur, offset)
 	}
 
 	changes := make([]*Change, 0)
 
-	if curHeight > prevHeight {
-		subCount := nodesForHeight(curBitWidth, curHeight)
+	if curCtx.height > prevCtx.height {
+		subCount := curCtx.nodesAtHeight()
 		for i, ln := range cur.links {
 			if ln == nil || ln.cid == cid.Undef {
 				continue
 			}
 
-			subn, err := ln.load(ctx, curBs, curBitWidth, curHeight-1)
+			subCtx := &nodeContext{
+				bs:       curCtx.bs,
+				bitWidth: curCtx.bitWidth,
+				height:   curCtx.height - 1,
+			}
+
+			subn, err := ln.load(ctx, subCtx.bs, subCtx.bitWidth, subCtx.height)
 			if err != nil {
 				return nil, err
 			}
 
 			offs := offset + (uint64(i) * subCount)
 			if i == 0 {
-				cs, err := diffNode(ctx, prevBs, curBs, prev, subn, prevHeight, curHeight-1, prevBitWidth, curBitWidth, offs)
+				cs, err := diffNode(ctx, prevCtx, subCtx, prev, subn, offs)
 				if err != nil {
 					return nil, err
 				}
 
 				changes = append(changes, cs...)
 			} else {
-				cs, err := addAll(ctx, curBs, subn, curBitWidth, curHeight-1, offs)
+				cs, err := addAll(ctx, subCtx, subn, offs)
 				if err != nil {
 					return nil, err
 				}
@@ -105,14 +134,20 @@ func diffNode(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur *node
 		return changes, nil
 	}
 
-	if prevHeight > curHeight {
-		subCount := nodesForHeight(prevBitWidth, prevHeight)
+	if prevCtx.height > curCtx.height {
+		subCount := prevCtx.nodesAtHeight()
 		for i, ln := range prev.links {
 			if ln == nil || ln.cid == cid.Undef {
 				continue
 			}
 
-			subn, err := ln.load(ctx, prevBs, prevBitWidth, prevHeight-1)
+			subCtx := &nodeContext{
+				bs:       prevCtx.bs,
+				bitWidth: prevCtx.bitWidth,
+				height:   prevCtx.height - 1,
+			}
+
+			subn, err := ln.load(ctx, subCtx.bs, subCtx.bitWidth, subCtx.height)
 			if err != nil {
 				return nil, err
 			}
@@ -120,14 +155,14 @@ func diffNode(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur *node
 			offs := offset + (uint64(i) * subCount)
 
 			if i == 0 {
-				cs, err := diffNode(ctx, prevBs, curBs, subn, cur, prevHeight-1, curHeight, prevBitWidth, curBitWidth, offs)
+				cs, err := diffNode(ctx, subCtx, curCtx, subn, cur, offs)
 				if err != nil {
 					return nil, err
 				}
 
 				changes = append(changes, cs...)
 			} else {
-				cs, err := removeAll(ctx, prevBs, subn, prevBitWidth, prevHeight-1, offs)
+				cs, err := removeAll(ctx, subCtx, subn, offs)
 				if err != nil {
 					return nil, err
 				}
@@ -140,8 +175,8 @@ func diffNode(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur *node
 	}
 
 	// sanity check
-	if prevHeight != curHeight {
-		return nil, fmt.Errorf("comparing non-leaf nodes of unequal heights (%d, %d)", prevHeight, curHeight)
+	if prevCtx.height != curCtx.height {
+		return nil, fmt.Errorf("comparing non-leaf nodes of unequal heights (%d, %d)", prevCtx.height, curCtx.height)
 	}
 
 	if len(prev.links) != len(cur.links) {
@@ -152,7 +187,7 @@ func diffNode(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur *node
 		return nil, fmt.Errorf("nodes have no links")
 	}
 
-	subCount := nodesForHeight(prevBitWidth, prevHeight)
+	subCount := prevCtx.nodesAtHeight()
 	for i := range prev.links {
 		// Neither previous or current links are in use
 		if prev.links[i] == nil && cur.links[i] == nil {
@@ -165,13 +200,19 @@ func diffNode(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur *node
 				continue
 			}
 
-			subn, err := prev.links[i].load(ctx, prevBs, prevBitWidth, prevHeight-1)
+			subCtx := &nodeContext{
+				bs:       prevCtx.bs,
+				bitWidth: prevCtx.bitWidth,
+				height:   prevCtx.height - 1,
+			}
+
+			subn, err := prev.links[i].load(ctx, subCtx.bs, subCtx.bitWidth, subCtx.height)
 			if err != nil {
 				return nil, err
 			}
 
 			offs := offset + (uint64(i) * subCount)
-			cs, err := removeAll(ctx, prevBs, subn, prevBitWidth, prevHeight-1, offs)
+			cs, err := removeAll(ctx, subCtx, subn, offs)
 			if err != nil {
 				return nil, err
 			}
@@ -186,13 +227,20 @@ func diffNode(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur *node
 			if cur.links[i].cid == cid.Undef {
 				continue
 			}
-			subn, err := cur.links[i].load(ctx, curBs, curBitWidth, curHeight-1)
+
+			subCtx := &nodeContext{
+				bs:       curCtx.bs,
+				bitWidth: curCtx.bitWidth,
+				height:   curCtx.height - 1,
+			}
+
+			subn, err := cur.links[i].load(ctx, subCtx.bs, subCtx.bitWidth, subCtx.height)
 			if err != nil {
 				return nil, err
 			}
 
 			offs := offset + (uint64(i) * subCount)
-			cs, err := addAll(ctx, curBs, subn, curBitWidth, curHeight-1, offs)
+			cs, err := addAll(ctx, subCtx, subn, offs)
 			if err != nil {
 				return nil, err
 			}
@@ -204,19 +252,31 @@ func diffNode(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur *node
 
 		// Both previous and current have links to diff
 
-		prevSubn, err := prev.links[i].load(ctx, prevBs, prevBitWidth, prevHeight-1)
+		prevSubCtx := &nodeContext{
+			bs:       prevCtx.bs,
+			bitWidth: prevCtx.bitWidth,
+			height:   prevCtx.height - 1,
+		}
+
+		prevSubn, err := prev.links[i].load(ctx, prevSubCtx.bs, prevSubCtx.bitWidth, prevSubCtx.height)
 		if err != nil {
 			return nil, err
 		}
 
-		curSubn, err := cur.links[i].load(ctx, curBs, curBitWidth, curHeight-1)
+		curSubCtx := &nodeContext{
+			bs:       curCtx.bs,
+			bitWidth: curCtx.bitWidth,
+			height:   curCtx.height - 1,
+		}
+
+		curSubn, err := cur.links[i].load(ctx, curSubCtx.bs, curSubCtx.bitWidth, curSubCtx.height)
 		if err != nil {
 			return nil, err
 		}
 
 		offs := offset + (uint64(i) * subCount)
 
-		cs, err := diffNode(ctx, prevBs, curBs, prevSubn, curSubn, prevHeight-1, curHeight-1, prevBitWidth, curBitWidth, offs)
+		cs, err := diffNode(ctx, prevSubCtx, curSubCtx, prevSubn, curSubn, offs)
 		if err != nil {
 			return nil, err
 		}
@@ -227,9 +287,9 @@ func diffNode(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur *node
 	return changes, nil
 }
 
-func addAll(ctx context.Context, bs cbor.IpldStore, node *node, bitWidth uint, height int, offset uint64) ([]*Change, error) {
+func addAll(ctx context.Context, nc *nodeContext, node *node, offset uint64) ([]*Change, error) {
 	changes := make([]*Change, 0)
-	err := node.forEachAt(ctx, bs, bitWidth, height, 0, offset, func(index uint64, deferred *cbg.Deferred) error {
+	err := node.forEachAt(ctx, nc.bs, nc.bitWidth, nc.height, 0, offset, func(index uint64, deferred *cbg.Deferred) error {
 		changes = append(changes, &Change{
 			Type:   Add,
 			Key:    index,
@@ -246,10 +306,10 @@ func addAll(ctx context.Context, bs cbor.IpldStore, node *node, bitWidth uint, h
 	return changes, nil
 }
 
-func removeAll(ctx context.Context, bs cbor.IpldStore, node *node, bitWidth uint, height int, offset uint64) ([]*Change, error) {
+func removeAll(ctx context.Context, nc *nodeContext, node *node, offset uint64) ([]*Change, error) {
 	changes := make([]*Change, 0)
 
-	err := node.forEachAt(ctx, bs, bitWidth, height, 0, offset, func(index uint64, deferred *cbg.Deferred) error {
+	err := node.forEachAt(ctx, nc.bs, nc.bitWidth, nc.height, 0, offset, func(index uint64, deferred *cbg.Deferred) error {
 		changes = append(changes, &Change{
 			Type:   Remove,
 			Key:    index,
