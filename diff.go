@@ -74,8 +74,6 @@ func diffNode(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur *node
 
 	if curHeight > prevHeight {
 		subCount := nodesForHeight(curBitWidth, curHeight)
-
-		// TODO: cur.links may be nil
 		for i, ln := range cur.links {
 			if ln == nil || ln.cid == cid.Undef {
 				continue
@@ -109,7 +107,6 @@ func diffNode(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur *node
 
 	if prevHeight > curHeight {
 		subCount := nodesForHeight(prevBitWidth, prevHeight)
-		// TODO: prev.links may be nil
 		for i, ln := range prev.links {
 			if ln == nil || ln.cid == cid.Undef {
 				continue
