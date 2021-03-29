@@ -93,7 +93,7 @@ func diffNode(ctx context.Context, prevCtx, curCtx *nodeContext, prev, cur *node
 		return diffLeaves(prev, cur, offset)
 	}
 
-	changes := make([]*Change, 0)
+	var changes []*Change
 
 	if curCtx.height > prevCtx.height {
 		subCount := curCtx.nodesAtHeight()
@@ -288,7 +288,7 @@ func diffNode(ctx context.Context, prevCtx, curCtx *nodeContext, prev, cur *node
 }
 
 func addAll(ctx context.Context, nc *nodeContext, node *node, offset uint64) ([]*Change, error) {
-	changes := make([]*Change, 0)
+	var changes []*Change
 	err := node.forEachAt(ctx, nc.bs, nc.bitWidth, nc.height, 0, offset, func(index uint64, deferred *cbg.Deferred) error {
 		changes = append(changes, &Change{
 			Type:   Add,
@@ -307,7 +307,7 @@ func addAll(ctx context.Context, nc *nodeContext, node *node, offset uint64) ([]
 }
 
 func removeAll(ctx context.Context, nc *nodeContext, node *node, offset uint64) ([]*Change, error) {
-	changes := make([]*Change, 0)
+	var changes []*Change
 
 	err := node.forEachAt(ctx, nc.bs, nc.bitWidth, nc.height, 0, offset, func(index uint64, deferred *cbg.Deferred) error {
 		changes = append(changes, &Change{
@@ -331,7 +331,7 @@ func diffLeaves(prev, cur *node, offset uint64) ([]*Change, error) {
 		return nil, fmt.Errorf("node leaves have different numbers of values (prev=%d, cur=%d)", len(prev.values), len(cur.values))
 	}
 
-	changes := make([]*Change, 0)
+	var changes []*Change
 	for i, prevVal := range prev.values {
 		index := offset + uint64(i)
 

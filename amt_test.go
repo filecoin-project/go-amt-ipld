@@ -834,7 +834,7 @@ func TestFirstSetIndex(t *testing.T) {
 		found, err := after.Delete(ctx, v)
 		require.NoError(t, err)
 		require.True(t, found)
-		fsi, err = after.FirstSetIndex(ctx)
+		_, err = after.FirstSetIndex(ctx)
 		require.Error(t, err)
 	}
 }
