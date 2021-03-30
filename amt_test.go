@@ -30,14 +30,16 @@ func init() {
 }
 
 func TestMain(m *testing.M) {
+	var exitCode int
+
 	// Hack to test with multiple widths, without hassle.
 	for defaultBitWidth = 2; defaultBitWidth <= 18; defaultBitWidth++ {
 		fmt.Printf("WIDTH %d\n", defaultBitWidth)
 		if code := m.Run(); code != 0 {
-			os.Exit(code)
+			exitCode = code
 		}
 	}
-	os.Exit(0)
+	os.Exit(exitCode)
 }
 
 type mockBlocks struct {
@@ -125,7 +127,6 @@ func TestBasicSetGet(t *testing.T) {
 	assertGet(ctx, t, clean, 2, "foo")
 
 	assertCount(t, clean, 1)
-
 }
 
 func TestRoundTrip(t *testing.T) {
@@ -328,9 +329,9 @@ func TestChaos(t *testing.T) {
 	bs := cbor.NewCborStore(newMockBlocks())
 	seed := time.Now().UnixNano()
 	ctx := context.Background()
-	//seed = 1579200312848358622 // FIXED
-	//seed = 1579202116615474412
-	//seed = 1579202774458659521
+	// seed = 1579200312848358622 // FIXED
+	// seed = 1579202116615474412
+	// seed = 1579202774458659521
 	// all above are with ops=100,maxIndx=2000
 	r := rand.New(rand.NewSource(seed))
 	t.Logf("seed: %d", seed)
@@ -526,7 +527,7 @@ func TestDelete(t *testing.T) {
 	assertDelete(t, a, 3)
 
 	assertCount(t, a, 0)
-	fmt.Println("trying deeper operations now")
+	t.Logf("trying deeper operations now")
 
 	assertSet(t, a, 23, "dog")
 	assertSet(t, a, 24, "dog")
@@ -557,9 +558,9 @@ func TestDelete(t *testing.T) {
 	}
 
 	if c != a2c {
-		fmt.Printf("%#v\n", a)
-		fmt.Printf("%#v\n", na)
-		fmt.Printf("%#v\n", a2)
+		t.Logf("%#v\n", a)
+		t.Logf("%#v\n", na)
+		t.Logf("%#v\n", a2)
 		t.Fatal("unexpected cid", c, a2c)
 	}
 }
@@ -833,7 +834,7 @@ func TestFirstSetIndex(t *testing.T) {
 		found, err := after.Delete(ctx, v)
 		require.NoError(t, err)
 		require.True(t, found)
-		fsi, err = after.FirstSetIndex(ctx)
+		_, err = after.FirstSetIndex(ctx)
 		require.Error(t, err)
 	}
 }

@@ -344,7 +344,6 @@ func (n *node) forEachAt(ctx context.Context, bs cbor.IpldStore, bitWidth uint, 
 		}
 	}
 	return nil
-
 }
 
 var errNoVals = fmt.Errorf("no values")
