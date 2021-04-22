@@ -1,0 +1,64 @@
+version: 2.1
+orbs:
+  go: gotest/tools@0.0.9
+  codecov: codecov/codecov@1.0.2
+
+executors:
+  golang:
+    docker:
+      - image: circleci/golang:1.12
+
+commands:
+  install-deps:
+    steps:
+      - go/install-ssh
+      - go/install: {package: git}
+  prepare:
+    parameters:
+      linux:
+        default: true
+        description: is a linux build environment?
+        type: boolean
+    steps:
+      - checkout
+      - when:
+          condition: << parameters.linux >>
+          steps:
+            - run: sudo apt-get update
+  build-all:
+
+
+jobs:
+  mod-tidy-check:
+    executor: golang
+    steps:
+      - install-deps
+      - prepare
+      - go/mod-download
+      - go/mod-tidy-check
+
+  build-all:
+    executor: golang
+    steps:
+      - install-deps
+      - prepare
+      - go/mod-download
+      - run:
+          command: go build ./...
+
+  test-all:
+    executor: golang
+    steps:
+      - install-deps
+      - prepare
+      - go/mod-download
+      - run:
+          command: go test ./...
+
+workflows:
+  version: 2.1
+  ci:
+    jobs:
+      - mod-tidy-check
+      - build-all
+      - test-all
