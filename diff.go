@@ -38,9 +38,9 @@ func (ch Change) String() string {
 	return string(b)
 }
 
-// Diff returns a set of changes that transform node 'a' into node 'b'.
-func Diff(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur cid.Cid) ([]*Change, error) {
-	prevAmt, err := LoadAMT(ctx, prevBs, prev)
+// Diff returns a set of changes that transform node 'a' into node 'b'. opts are applied to both prev and cur.
+func Diff(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur cid.Cid, opts ...Option) ([]*Change, error) {
+	prevAmt, err := LoadAMT(ctx, prevBs, prev, opts...)
 	if err != nil {
 		return nil, xerrors.Errorf("loading previous root: %w", err)
 	}
@@ -51,9 +51,14 @@ func Diff(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur cid.Cid) 
 		height:   prevAmt.height,
 	}
 
-	curAmt, err := LoadAMT(ctx, curBs, cur)
+	curAmt, err := LoadAMT(ctx, curBs, cur, opts...)
 	if err != nil {
 		return nil, xerrors.Errorf("loading current root: %w", err)
+	}
+
+	// TODO: remove when https://github.com/filecoin-project/go-amt-ipld/issues/54 is closed.
+	if curAmt.bitWidth != prevAmt.bitWidth {
+		return nil, xerrors.Errorf("diffing AMTs with differing bitWidths not supported (prev=%d, cur=%d)", prevAmt.bitWidth, curAmt.bitWidth)
 	}
 
 	curCtx := &nodeContext{
