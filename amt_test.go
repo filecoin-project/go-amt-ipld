@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"os"
 	"testing"
 	"time"
 
@@ -27,16 +28,16 @@ func init() {
 	}
 }
 
-// func TestMain(m *testing.M) {
-// 	// Hack to test with multiple widths, without hassle.
-// 	for defaultBitWidth = 2; defaultBitWidth <= 18; defaultBitWidth++ {
-// 		fmt.Printf("WIDTH %d\n", defaultBitWidth)
-// 		if code := m.Run(); code != 0 {
-// 			os.Exit(code)
-// 		}
-// 	}
-// 	os.Exit(0)
-// }
+func TestMain(m *testing.M) {
+	// Hack to test with multiple widths, without hassle.
+	for defaultBitWidth = 2; defaultBitWidth <= 18; defaultBitWidth++ {
+		fmt.Printf("WIDTH %d\n", defaultBitWidth)
+		if code := m.Run(); code != 0 {
+			os.Exit(code)
+		}
+	}
+	os.Exit(0)
+}
 
 type mockBlocks struct {
 	data  map[cid.Cid]block.Block
