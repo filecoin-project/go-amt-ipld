@@ -6,9 +6,8 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-
 	cbor "github.com/ipfs/go-ipld-cbor"
+	"github.com/stretchr/testify/assert"
 )
 
 type expectedChange struct {
@@ -100,6 +99,65 @@ func TestSimpleAdd(t *testing.T) {
 	}
 
 	ec.assertExpectation(t, cs[0])
+}
+
+func TestDiffEmptyStateWithNonEmptyState(t *testing.T) {
+	t.Run("Removed values", func(t *testing.T) {
+		prevBs := cbor.NewCborStore(newMockBlocks())
+		curBs := cbor.NewCborStore(newMockBlocks())
+		ctx := context.Background()
+
+		prev, err := NewAMT(prevBs)
+		assert.NoError(t, err)
+
+		cur, err := NewAMT(curBs)
+		assert.NoError(t, err)
+		assertCount(t, cur, 0)
+
+		assertSet(t, prev, 2, "foo")
+		assertGet(ctx, t, prev, 2, "foo")
+		assertCount(t, prev, 1)
+
+		cs := diffAndAssertLength(ctx, t, prevBs, curBs, prev, cur, 1)
+
+		ec := expectedChange{
+			Type:   Remove,
+			Key:    2,
+			Before: "foo",
+			After:  "",
+		}
+
+		ec.assertExpectation(t, cs[0])
+	})
+
+	t.Run("Added values", func(t *testing.T) {
+		prevBs := cbor.NewCborStore(newMockBlocks())
+		curBs := cbor.NewCborStore(newMockBlocks())
+		ctx := context.Background()
+
+		prev, err := NewAMT(prevBs)
+		assert.NoError(t, err)
+		assertCount(t, prev, 0)
+
+		cur, err := NewAMT(curBs)
+		assert.NoError(t, err)
+
+		assertSet(t, cur, 2, "foo")
+		assertGet(ctx, t, cur, 2, "foo")
+		assertCount(t, cur, 1)
+
+		cs := diffAndAssertLength(ctx, t, prevBs, curBs, prev, cur, 1)
+
+		ec := expectedChange{
+			Type:   Add,
+			Key:    2,
+			Before: "",
+			After:  "foo",
+		}
+
+		ec.assertExpectation(t, cs[0])
+
+	})
 }
 
 func TestSimpleRemove(t *testing.T) {
