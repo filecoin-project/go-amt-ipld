@@ -67,6 +67,13 @@ func Diff(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur cid.Cid, 
 		height:   curAmt.height,
 	}
 
+	// edge case of diffing an empty AMT against non-empty
+	if prevAmt.count == 0 && curAmt.count != 0 {
+		return addAll(ctx, curCtx, curAmt.node, 0)
+	}
+	if prevAmt.count != 0 && curAmt.count == 0 {
+		return removeAll(ctx, prevCtx, prevAmt.node, 0)
+	}
 	return diffNode(ctx, prevCtx, curCtx, prevAmt.node, curAmt.node, 0)
 }
 
