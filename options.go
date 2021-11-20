@@ -15,7 +15,7 @@ type Option func(*config) error
 func UseTreeBitWidth(bitWidth uint) Option {
 	return func(c *config) error {
 		if bitWidth < 1 {
-			return fmt.Errorf("bit width must be at least 2, is %d", bitWidth)
+			return fmt.Errorf("bit width must be at least 1 (i.e. 2 children per node), is %d", bitWidth)
 		}
 		c.bitWidth = bitWidth
 		return nil
