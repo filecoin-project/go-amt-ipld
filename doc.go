@@ -27,7 +27,7 @@ nodes. An AMT's "bitWidth" dictates the width, or maximum-brancing factor
 (arity) of the AMT's nodes by determining how many bits of the original index
 are used to determine the index at any given level. A bitWidth of 3 (the
 default for this implementation) can generate indexes in the range of 0 to
-(3^2)-1=7, i.e. a "width" of 8. In practice, this means that an AMT with a
+(2^3)-1=7, i.e. a "width" of 8. In practice, this means that an AMT with a
 bitWidth of 3 has a branching factor of _between 1 and 8_ for any node in the
 structure.
 
