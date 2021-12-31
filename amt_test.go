@@ -154,11 +154,31 @@ func TestMaxRange(t *testing.T) {
 	a, err := NewAMT(bs)
 	require.NoError(t, err)
 
-	err = a.Set(ctx, MaxIndex, cborstr("what is up 1"))
+	key := uint64(MaxIndex)
+	expected := cborstr("what is up 1")
+	err = a.Set(ctx, key, expected)
 	require.NoError(t, err)
+
+	var actual CborByteArray
+	found, err := a.Get(ctx, key, &actual)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.EqualValues(t, actual, *expected)
+
+	found = false
+	require.NoError(t, a.ForEach(ctx, func(i uint64, v *cbg.Deferred) error {
+		require.Equal(t, uint64(i), key)
+		found = true
+		return nil
+	}))
+	require.True(t, found)
 
 	err = a.Set(ctx, MaxIndex+1, cborstr("what is up 2"))
 	require.Error(t, err)
+
+	found, err = a.Get(ctx, MaxIndex+1, &actual)
+	require.Error(t, err)
+	require.False(t, found)
 }
 
 func TestMaxRange11(t *testing.T) {

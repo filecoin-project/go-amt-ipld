@@ -327,7 +327,9 @@ func (n *node) forEachAt(ctx context.Context, bs cbor.IpldStore, bitWidth uint, 
 		// by 'sub'
 		offs := offset + (uint64(i) * subCount)
 		nextOffs := offs + subCount
-		if start >= nextOffs {
+		// nextOffs > offs checks for overflow at MaxIndex (where the next offset wraps back
+		// to 0).
+		if nextOffs >= offs && start >= nextOffs {
 			// if we're here, 'start' lets us skip this entire sub-tree
 			continue
 		}
