@@ -1,4 +1,4 @@
-module github.com/filecoin-project/go-amt-ipld/v3
+module github.com/filecoin-project/go-amt-ipld/v4
 
 go 1.16
 

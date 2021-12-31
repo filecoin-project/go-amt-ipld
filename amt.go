@@ -11,7 +11,7 @@ import (
 	cbor "github.com/ipfs/go-ipld-cbor"
 	cbg "github.com/whyrusleeping/cbor-gen"
 
-	"github.com/filecoin-project/go-amt-ipld/v3/internal"
+	"github.com/filecoin-project/go-amt-ipld/v4/internal"
 )
 
 // MaxIndex is the maximum index for elements in the AMT. This MaxUint64-1 so we
