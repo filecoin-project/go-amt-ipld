@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	cbg "github.com/whyrusleeping/cbor-gen"
 
-	"github.com/filecoin-project/go-amt-ipld/v3/internal"
+	"github.com/filecoin-project/go-amt-ipld/v4/internal"
 )
 
 var numbers []cbg.CBORMarshaler
