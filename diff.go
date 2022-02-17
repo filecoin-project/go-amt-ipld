@@ -437,6 +437,7 @@ func ParallelDiff(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur c
 	}()
 
 	if err := grp.Wait(); err != nil {
+		close(out)
 		return nil, err
 	}
 	close(out)
