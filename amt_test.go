@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -44,14 +45,37 @@ func TestMain(m *testing.M) {
 
 type mockBlocks struct {
 	data               map[cid.Cid]block.Block
+	dataMu             sync.Mutex
 	getCount, putCount int
+	delay              time.Duration
 }
 
-func newMockBlocks() *mockBlocks {
-	return &mockBlocks{make(map[cid.Cid]block.Block), 0, 0}
+type mockBlocksOpt func(m *mockBlocks)
+
+func WithGetDelay(d time.Duration) mockBlocksOpt {
+	return func(m *mockBlocks) {
+		m.delay = d
+	}
+}
+
+func newMockBlocks(opts ...mockBlocksOpt) *mockBlocks {
+	mb := &mockBlocks{
+		data:     make(map[cid.Cid]block.Block),
+		dataMu:   sync.Mutex{},
+		getCount: 0,
+		putCount: 0,
+		delay:    0,
+	}
+	for _, opt := range opts {
+		opt(mb)
+	}
+	return mb
 }
 
 func (mb *mockBlocks) Get(c cid.Cid) (block.Block, error) {
+	time.Sleep(mb.delay)
+	mb.dataMu.Lock()
+	defer mb.dataMu.Unlock()
 	d, ok := mb.data[c]
 	mb.getCount++
 	if ok {
@@ -61,6 +85,8 @@ func (mb *mockBlocks) Get(c cid.Cid) (block.Block, error) {
 }
 
 func (mb *mockBlocks) Put(b block.Block) error {
+	mb.dataMu.Lock()
+	defer mb.dataMu.Unlock()
 	mb.putCount++
 	mb.data[b.Cid()] = b
 	return nil
