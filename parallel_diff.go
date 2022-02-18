@@ -85,11 +85,11 @@ func parallelDiffNode(ctx context.Context, prevCtx, curCtx *nodeContext, prev, c
 		}
 
 		if prev == nil {
-			return parallelAddAll(ctx, curCtx, cur, offset, outCh)
+			return parallelAddAll(ctx, curCtx, cur, offset, grp, outCh)
 		}
 
 		if cur == nil {
-			return parallelRemoveAll(ctx, prevCtx, prev, offset, outCh)
+			return parallelRemoveAll(ctx, prevCtx, prev, offset, grp, outCh)
 		}
 
 		if prevCtx.height == 0 && curCtx.height == 0 {
@@ -119,7 +119,7 @@ func parallelDiffNode(ctx context.Context, prevCtx, curCtx *nodeContext, prev, c
 				if i == 0 {
 					parallelDiffNode(ctx, prevCtx, subCtx, prev, subn, offs, grp, outCh, gets)
 				} else {
-					err := parallelAddAll(ctx, subCtx, subn, offs, outCh)
+					err := parallelAddAll(ctx, subCtx, subn, offs, grp, outCh)
 					if err != nil {
 						return err
 					}
@@ -153,7 +153,7 @@ func parallelDiffNode(ctx context.Context, prevCtx, curCtx *nodeContext, prev, c
 				if i == 0 {
 					parallelDiffNode(ctx, subCtx, curCtx, subn, cur, offs, grp, outCh, gets)
 				} else {
-					err := parallelRemoveAll(ctx, subCtx, subn, offs, outCh)
+					err := parallelRemoveAll(ctx, subCtx, subn, offs, grp, outCh)
 					if err != nil {
 						return err
 					}
@@ -202,7 +202,7 @@ func parallelDiffNode(ctx context.Context, prevCtx, curCtx *nodeContext, prev, c
 				}
 
 				offs := offset + (uint64(i) * subCount)
-				err = parallelRemoveAll(ctx, subCtx, subn, offs, outCh)
+				err = parallelRemoveAll(ctx, subCtx, subn, offs, grp, outCh)
 				if err != nil {
 					return err
 				}
@@ -228,7 +228,7 @@ func parallelDiffNode(ctx context.Context, prevCtx, curCtx *nodeContext, prev, c
 				}
 
 				offs := offset + (uint64(i) * subCount)
-				err = parallelAddAll(ctx, subCtx, subn, offs, outCh)
+				err = parallelAddAll(ctx, subCtx, subn, offs, grp, outCh)
 				if err != nil {
 					return err
 				}
@@ -273,29 +273,33 @@ func parallelDiffNode(ctx context.Context, prevCtx, curCtx *nodeContext, prev, c
 	})
 }
 
-func parallelAddAll(ctx context.Context, nc *nodeContext, node *node, offset uint64, out chan *Change) error {
-	err := node.forEachAt(ctx, nc.bs, nc.bitWidth, nc.height, 0, offset, func(index uint64, deferred *cbg.Deferred) error {
-		out <- &Change{
-			Type:   Add,
-			Key:    index,
-			Before: nil,
-			After:  deferred,
-		}
+func parallelAddAll(ctx context.Context, nc *nodeContext, node *node, offset uint64, grp *errgroup.Group, out chan *Change) error {
+	return node.forEachAt(ctx, nc.bs, nc.bitWidth, nc.height, 0, offset, func(index uint64, deferred *cbg.Deferred) error {
+		grp.Go(func() error {
+			out <- &Change{
+				Type:   Add,
+				Key:    index,
+				Before: nil,
+				After:  deferred,
+			}
+			return nil
+		})
 		return nil
 	})
-	return err
 }
-func parallelRemoveAll(ctx context.Context, nc *nodeContext, node *node, offset uint64, out chan *Change) error {
-	err := node.forEachAt(ctx, nc.bs, nc.bitWidth, nc.height, 0, offset, func(index uint64, deferred *cbg.Deferred) error {
-		out <- &Change{
-			Type:   Remove,
-			Key:    index,
-			Before: deferred,
-			After:  nil,
-		}
+func parallelRemoveAll(ctx context.Context, nc *nodeContext, node *node, offset uint64, grp *errgroup.Group, out chan *Change) error {
+	return node.forEachAt(ctx, nc.bs, nc.bitWidth, nc.height, 0, offset, func(index uint64, deferred *cbg.Deferred) error {
+		grp.Go(func() error {
+			out <- &Change{
+				Type:   Remove,
+				Key:    index,
+				Before: deferred,
+				After:  nil,
+			}
+			return nil
+		})
 		return nil
 	})
-	return err
 }
 
 func parallelDiffLeaves(prev, cur *node, offset uint64, out chan *Change) error {
