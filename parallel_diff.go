@@ -4,15 +4,21 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync/atomic"
+	"time"
 
 	"github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
+	logging "github.com/ipfs/go-log/v2"
 	cbg "github.com/whyrusleeping/cbor-gen"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/xerrors"
 )
 
+var log = logging.Logger("amt")
+
 func ParallelDiff(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur cid.Cid, opts ...Option) ([]*Change, error) {
+	start := time.Now()
 	prevAmt, err := LoadAMT(ctx, prevBs, prev, opts...)
 	if err != nil {
 		return nil, xerrors.Errorf("loading previous root: %w", err)
@@ -49,7 +55,8 @@ func ParallelDiff(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur c
 	}
 	grp, ctx := errgroup.WithContext(ctx)
 	out := make(chan *Change)
-	parallelDiffNode(ctx, prevCtx, curCtx, prevAmt.node, curAmt.node, 0, grp, out)
+	gets := int64(0) // updated atomically
+	parallelDiffNode(ctx, prevCtx, curCtx, prevAmt.node, curAmt.node, 0, grp, out, &gets)
 
 	var changes []*Change
 	done := make(chan struct{}, 1)
@@ -66,11 +73,12 @@ func ParallelDiff(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur c
 	}
 	close(out)
 	<-done
+	log.Infow("parallel diff", "duration", time.Since(start), "gets", gets)
 
 	return changes, nil
 }
 
-func parallelDiffNode(ctx context.Context, prevCtx, curCtx *nodeContext, prev, cur *node, offset uint64, grp *errgroup.Group, outCh chan *Change) {
+func parallelDiffNode(ctx context.Context, prevCtx, curCtx *nodeContext, prev, cur *node, offset uint64, grp *errgroup.Group, outCh chan *Change, gets *int64) {
 	grp.Go(func() error {
 		if prev == nil && cur == nil {
 			return nil
@@ -101,6 +109,7 @@ func parallelDiffNode(ctx context.Context, prevCtx, curCtx *nodeContext, prev, c
 					height:   curCtx.height - 1,
 				}
 
+				atomic.AddInt64(gets, 1)
 				subn, err := ln.load(ctx, subCtx.bs, subCtx.bitWidth, subCtx.height)
 				if err != nil {
 					return err
@@ -108,7 +117,7 @@ func parallelDiffNode(ctx context.Context, prevCtx, curCtx *nodeContext, prev, c
 
 				offs := offset + (uint64(i) * subCount)
 				if i == 0 {
-					parallelDiffNode(ctx, prevCtx, subCtx, prev, subn, offs, grp, outCh)
+					parallelDiffNode(ctx, prevCtx, subCtx, prev, subn, offs, grp, outCh, gets)
 				} else {
 					err := parallelAddAll(ctx, subCtx, subn, offs, outCh)
 					if err != nil {
@@ -133,6 +142,7 @@ func parallelDiffNode(ctx context.Context, prevCtx, curCtx *nodeContext, prev, c
 					height:   prevCtx.height - 1,
 				}
 
+				atomic.AddInt64(gets, 1)
 				subn, err := ln.load(ctx, subCtx.bs, subCtx.bitWidth, subCtx.height)
 				if err != nil {
 					return err
@@ -141,7 +151,7 @@ func parallelDiffNode(ctx context.Context, prevCtx, curCtx *nodeContext, prev, c
 				offs := offset + (uint64(i) * subCount)
 
 				if i == 0 {
-					parallelDiffNode(ctx, subCtx, curCtx, subn, cur, offs, grp, outCh)
+					parallelDiffNode(ctx, subCtx, curCtx, subn, cur, offs, grp, outCh, gets)
 				} else {
 					err := parallelRemoveAll(ctx, subCtx, subn, offs, outCh)
 					if err != nil {
@@ -185,6 +195,7 @@ func parallelDiffNode(ctx context.Context, prevCtx, curCtx *nodeContext, prev, c
 					height:   prevCtx.height - 1,
 				}
 
+				atomic.AddInt64(gets, 1)
 				subn, err := prev.links[i].load(ctx, subCtx.bs, subCtx.bitWidth, subCtx.height)
 				if err != nil {
 					return err
@@ -210,6 +221,7 @@ func parallelDiffNode(ctx context.Context, prevCtx, curCtx *nodeContext, prev, c
 					height:   curCtx.height - 1,
 				}
 
+				atomic.AddInt64(gets, 1)
 				subn, err := cur.links[i].load(ctx, subCtx.bs, subCtx.bitWidth, subCtx.height)
 				if err != nil {
 					return err
@@ -231,6 +243,7 @@ func parallelDiffNode(ctx context.Context, prevCtx, curCtx *nodeContext, prev, c
 				height:   prevCtx.height - 1,
 			}
 
+			atomic.AddInt64(gets, 1)
 			prevSubn, err := prev.links[i].load(ctx, prevSubCtx.bs, prevSubCtx.bitWidth, prevSubCtx.height)
 			if err != nil {
 				return err
@@ -242,6 +255,7 @@ func parallelDiffNode(ctx context.Context, prevCtx, curCtx *nodeContext, prev, c
 				height:   curCtx.height - 1,
 			}
 
+			atomic.AddInt64(gets, 1)
 			curSubn, err := cur.links[i].load(ctx, curSubCtx.bs, curSubCtx.bitWidth, curSubCtx.height)
 			if err != nil {
 				return err
@@ -249,7 +263,7 @@ func parallelDiffNode(ctx context.Context, prevCtx, curCtx *nodeContext, prev, c
 
 			offs := offset + (uint64(i) * subCount)
 
-			parallelDiffNode(ctx, prevSubCtx, curSubCtx, prevSubn, curSubn, offs, grp, outCh)
+			parallelDiffNode(ctx, prevSubCtx, curSubCtx, prevSubn, curSubn, offs, grp, outCh, gets)
 			if err != nil {
 				return err
 			}
