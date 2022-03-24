@@ -5,6 +5,8 @@ package internal
 import (
 	"fmt"
 	"io"
+	"math"
+	"sort"
 
 	cid "github.com/ipfs/go-cid"
 	cbg "github.com/whyrusleeping/cbor-gen"
@@ -12,6 +14,9 @@ import (
 )
 
 var _ = xerrors.Errorf
+var _ = cid.Undef
+var _ = math.E
+var _ = sort.Sort
 
 var lengthBufRoot = []byte{132}
 
@@ -20,47 +25,53 @@ func (t *Root) MarshalCBOR(w io.Writer) error {
 		_, err := w.Write(cbg.CborNull)
 		return err
 	}
-	if _, err := w.Write(lengthBufRoot); err != nil {
+
+	cw := cbg.NewCborWriter(w)
+
+	if _, err := cw.Write(lengthBufRoot); err != nil {
 		return err
 	}
 
-	scratch := make([]byte, 9)
-
 	// t.BitWidth (uint64) (uint64)
 
-	if err := cbg.WriteMajorTypeHeaderBuf(scratch, w, cbg.MajUnsignedInt, uint64(t.BitWidth)); err != nil {
+	if err := cw.WriteMajorTypeHeader(cbg.MajUnsignedInt, uint64(t.BitWidth)); err != nil {
 		return err
 	}
 
 	// t.Height (uint64) (uint64)
 
-	if err := cbg.WriteMajorTypeHeaderBuf(scratch, w, cbg.MajUnsignedInt, uint64(t.Height)); err != nil {
+	if err := cw.WriteMajorTypeHeader(cbg.MajUnsignedInt, uint64(t.Height)); err != nil {
 		return err
 	}
 
 	// t.Count (uint64) (uint64)
 
-	if err := cbg.WriteMajorTypeHeaderBuf(scratch, w, cbg.MajUnsignedInt, uint64(t.Count)); err != nil {
+	if err := cw.WriteMajorTypeHeader(cbg.MajUnsignedInt, uint64(t.Count)); err != nil {
 		return err
 	}
 
 	// t.Node (internal.Node) (struct)
-	if err := t.Node.MarshalCBOR(w); err != nil {
+	if err := t.Node.MarshalCBOR(cw); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (t *Root) UnmarshalCBOR(r io.Reader) error {
+func (t *Root) UnmarshalCBOR(r io.Reader) (err error) {
 	*t = Root{}
 
-	br := cbg.GetPeeker(r)
-	scratch := make([]byte, 8)
+	cr := cbg.NewCborReader(r)
 
-	maj, extra, err := cbg.CborReadHeaderBuf(br, scratch)
+	maj, extra, err := cr.ReadHeader()
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err == io.EOF {
+			err = io.ErrUnexpectedEOF
+		}
+	}()
+
 	if maj != cbg.MajArray {
 		return fmt.Errorf("cbor input should be of type array")
 	}
@@ -73,7 +84,7 @@ func (t *Root) UnmarshalCBOR(r io.Reader) error {
 
 	{
 
-		maj, extra, err = cbg.CborReadHeaderBuf(br, scratch)
+		maj, extra, err = cr.ReadHeader()
 		if err != nil {
 			return err
 		}
@@ -87,7 +98,7 @@ func (t *Root) UnmarshalCBOR(r io.Reader) error {
 
 	{
 
-		maj, extra, err = cbg.CborReadHeaderBuf(br, scratch)
+		maj, extra, err = cr.ReadHeader()
 		if err != nil {
 			return err
 		}
@@ -101,7 +112,7 @@ func (t *Root) UnmarshalCBOR(r io.Reader) error {
 
 	{
 
-		maj, extra, err = cbg.CborReadHeaderBuf(br, scratch)
+		maj, extra, err = cr.ReadHeader()
 		if err != nil {
 			return err
 		}
@@ -115,7 +126,7 @@ func (t *Root) UnmarshalCBOR(r io.Reader) error {
 
 	{
 
-		if err := t.Node.UnmarshalCBOR(br); err != nil {
+		if err := t.Node.UnmarshalCBOR(cr); err != nil {
 			return xerrors.Errorf("unmarshaling t.Node: %w", err)
 		}
 
@@ -130,22 +141,23 @@ func (t *Node) MarshalCBOR(w io.Writer) error {
 		_, err := w.Write(cbg.CborNull)
 		return err
 	}
-	if _, err := w.Write(lengthBufNode); err != nil {
+
+	cw := cbg.NewCborWriter(w)
+
+	if _, err := cw.Write(lengthBufNode); err != nil {
 		return err
 	}
-
-	scratch := make([]byte, 9)
 
 	// t.Bmap ([]uint8) (slice)
 	if len(t.Bmap) > cbg.ByteArrayMaxLen {
 		return xerrors.Errorf("Byte array in field t.Bmap was too long")
 	}
 
-	if err := cbg.WriteMajorTypeHeaderBuf(scratch, w, cbg.MajByteString, uint64(len(t.Bmap))); err != nil {
+	if err := cw.WriteMajorTypeHeader(cbg.MajByteString, uint64(len(t.Bmap))); err != nil {
 		return err
 	}
 
-	if _, err := w.Write(t.Bmap[:]); err != nil {
+	if _, err := cw.Write(t.Bmap[:]); err != nil {
 		return err
 	}
 
@@ -154,11 +166,11 @@ func (t *Node) MarshalCBOR(w io.Writer) error {
 		return xerrors.Errorf("Slice value in field t.Links was too long")
 	}
 
-	if err := cbg.WriteMajorTypeHeaderBuf(scratch, w, cbg.MajArray, uint64(len(t.Links))); err != nil {
+	if err := cw.WriteMajorTypeHeader(cbg.MajArray, uint64(len(t.Links))); err != nil {
 		return err
 	}
 	for _, v := range t.Links {
-		if err := cbg.WriteCidBuf(scratch, w, v); err != nil {
+		if err := cbg.WriteCid(w, v); err != nil {
 			return xerrors.Errorf("failed writing cid field t.Links: %w", err)
 		}
 	}
@@ -168,27 +180,32 @@ func (t *Node) MarshalCBOR(w io.Writer) error {
 		return xerrors.Errorf("Slice value in field t.Values was too long")
 	}
 
-	if err := cbg.WriteMajorTypeHeaderBuf(scratch, w, cbg.MajArray, uint64(len(t.Values))); err != nil {
+	if err := cw.WriteMajorTypeHeader(cbg.MajArray, uint64(len(t.Values))); err != nil {
 		return err
 	}
 	for _, v := range t.Values {
-		if err := v.MarshalCBOR(w); err != nil {
+		if err := v.MarshalCBOR(cw); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (t *Node) UnmarshalCBOR(r io.Reader) error {
+func (t *Node) UnmarshalCBOR(r io.Reader) (err error) {
 	*t = Node{}
 
-	br := cbg.GetPeeker(r)
-	scratch := make([]byte, 8)
+	cr := cbg.NewCborReader(r)
 
-	maj, extra, err := cbg.CborReadHeaderBuf(br, scratch)
+	maj, extra, err := cr.ReadHeader()
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err == io.EOF {
+			err = io.ErrUnexpectedEOF
+		}
+	}()
+
 	if maj != cbg.MajArray {
 		return fmt.Errorf("cbor input should be of type array")
 	}
@@ -199,7 +216,7 @@ func (t *Node) UnmarshalCBOR(r io.Reader) error {
 
 	// t.Bmap ([]uint8) (slice)
 
-	maj, extra, err = cbg.CborReadHeaderBuf(br, scratch)
+	maj, extra, err = cr.ReadHeader()
 	if err != nil {
 		return err
 	}
@@ -215,12 +232,12 @@ func (t *Node) UnmarshalCBOR(r io.Reader) error {
 		t.Bmap = make([]uint8, extra)
 	}
 
-	if _, err := io.ReadFull(br, t.Bmap[:]); err != nil {
+	if _, err := io.ReadFull(cr, t.Bmap[:]); err != nil {
 		return err
 	}
 	// t.Links ([]cid.Cid) (slice)
 
-	maj, extra, err = cbg.CborReadHeaderBuf(br, scratch)
+	maj, extra, err = cr.ReadHeader()
 	if err != nil {
 		return err
 	}
@@ -239,7 +256,7 @@ func (t *Node) UnmarshalCBOR(r io.Reader) error {
 
 	for i := 0; i < int(extra); i++ {
 
-		c, err := cbg.ReadCid(br)
+		c, err := cbg.ReadCid(cr)
 		if err != nil {
 			return xerrors.Errorf("reading cid field t.Links failed: %w", err)
 		}
@@ -248,7 +265,7 @@ func (t *Node) UnmarshalCBOR(r io.Reader) error {
 
 	// t.Values ([]*typegen.Deferred) (slice)
 
-	maj, extra, err = cbg.CborReadHeaderBuf(br, scratch)
+	maj, extra, err = cr.ReadHeader()
 	if err != nil {
 		return err
 	}
@@ -268,7 +285,7 @@ func (t *Node) UnmarshalCBOR(r io.Reader) error {
 	for i := 0; i < int(extra); i++ {
 
 		var v cbg.Deferred
-		if err := v.UnmarshalCBOR(br); err != nil {
+		if err := v.UnmarshalCBOR(cr); err != nil {
 			return err
 		}
 
