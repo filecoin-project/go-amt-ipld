@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,14 +54,17 @@ func runBenchmarkWithBitWidths(b *testing.B, bitwidths []uint, fn func(*testing.
 
 type mockBlocks struct {
 	data               map[cid.Cid]block.Block
+	dataMu             sync.Mutex
 	getCount, putCount int
 }
 
 func newMockBlocks() *mockBlocks {
-	return &mockBlocks{make(map[cid.Cid]block.Block), 0, 0}
+	return &mockBlocks{make(map[cid.Cid]block.Block), sync.Mutex{}, 0, 0}
 }
 
 func (mb *mockBlocks) Get(c cid.Cid) (block.Block, error) {
+	mb.dataMu.Lock()
+	defer mb.dataMu.Unlock()
 	d, ok := mb.data[c]
 	mb.getCount++
 	if ok {
@@ -70,12 +74,16 @@ func (mb *mockBlocks) Get(c cid.Cid) (block.Block, error) {
 }
 
 func (mb *mockBlocks) Put(b block.Block) error {
+	mb.dataMu.Lock()
+	defer mb.dataMu.Unlock()
 	mb.putCount++
 	mb.data[b.Cid()] = b
 	return nil
 }
 
 func (mb *mockBlocks) report(b *testing.B) {
+	mb.dataMu.Lock()
+	defer mb.dataMu.Unlock()
 	b.ReportMetric(float64(mb.getCount)/float64(b.N), "gets/op")
 	b.ReportMetric(float64(mb.putCount)/float64(b.N), "puts/op")
 }
