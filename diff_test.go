@@ -439,5 +439,14 @@ func diffAndAssertLength(ctx context.Context, t *testing.T, prevBs, curBs cbor.I
 		t.Fatalf("got %d changes, wanted %d", len(cs), expectedLength)
 	}
 
+	cs, err = ParallelDiff(ctx, prevBs, curBs, aCid, bCid, 1, opts...)
+	if err != nil {
+		t.Fatalf("unexpected error from parallelDiff: %v", err)
+	}
+
+	if len(cs) != expectedLength {
+		t.Fatalf("got %d changes, wanted %d", len(cs), expectedLength)
+	}
+
 	return cs
 }
