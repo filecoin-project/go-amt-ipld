@@ -49,7 +49,7 @@ func ParallelDiff(ctx context.Context, prevBs, curBs cbor.IpldStore, prev, cur c
 		return removeAll(ctx, prevCtx, prevAmt.node, 0)
 	}
 	out := make(chan *Change)
-	differ, ctx := newDiffScheduler(ctx, 1, &task{
+	differ, ctx := newDiffScheduler(ctx, workers, &task{
 		prevCtx: prevCtx,
 		curCtx:  curCtx,
 		prev:    prevAmt.node,
