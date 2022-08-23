@@ -61,12 +61,12 @@ type Node struct {
 //
 // The root is serialized in the following form, described as an IPLD Schema:
 //
-// 	type Root struct {
-//    bitWidth Int
-//		height Int
-//		count Int
-//		node Node
-//	} representation tuple
+//		type Root struct {
+//	   bitWidth Int
+//			height Int
+//			count Int
+//			node Node
+//		} representation tuple
 //
 // Where bitWidth, height and count are unsigned integers and Node is the
 // initial root node, see below.

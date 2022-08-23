@@ -12,7 +12,7 @@ means of storing non-sparse array data as required, with a small amount of
 storage and algorithmic overhead required to handle mapping that assumes that
 some elements within any range of data may not be present.
 
-Algorithm Overview
+# Algorithm Overview
 
 The AMT algorithm produces a tree-like graph, with a single root node
 addressing a collection of child nodes which connect downward toward leaf nodes
@@ -144,7 +144,7 @@ bitmap is set, meaning only the left-most is present, which will become the
 new root node (repeated until the new root has more than the first bit set or
 height of 0, the single-node case).
 
-Further Reading
+# Further Reading
 
 See https://github.com/ipld/specs/blob/master/data-structures/hashmap.md for a
 description of a HAMT algorithm. And
@@ -152,7 +152,7 @@ https://github.com/ipld/specs/blob/master/data-structures/vector.md for a
 description of a similar algorithm to an AMT that doesn't support internal node
 compression and therefore doesn't support sparse arrays.
 
-Usage Considerations
+# Usage Considerations
 
 Unlike a HAMT, the AMT algorithm doesn't benefit from randomness introduced by
 a hash algorithm. Therefore an AMT used in cases where user-input can
@@ -182,6 +182,5 @@ There is a direct relationship between the sparseness of index values and the
 number of nodes required to address the entries. This should be the key
 consideration when determining whether an AMT is a suitable data-structure for
 a given application.
-
 */
 package amt
