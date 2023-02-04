@@ -16,7 +16,7 @@ import (
 // nodes.
 //
 // The Bmap (bitmap) has the same number of bits as the "width" of the AMT
-// (bitWidth^2), where each bit in the bitmap indicates the presence (1) or
+// (2^bitWidth), where each bit in the bitmap indicates the presence (1) or
 // absence (0) of a value or link to a child node. In this way, the serialized
 // form, and in-memory form of a Node contains only the value or links present.
 // There must be at least one value for height=0 nodes and at least one link for
@@ -31,8 +31,8 @@ import (
 //		values [Any]
 //	} representation tuple
 //
-// Where bmap is strictly a byte array of length (bitWidth^2)/8 and the links
-// and values arrays are between zero and the width of this AMT (bitWidth^2).
+// Where bmap is strictly a byte array of length (2^bitWidth)/8 and the links
+// and values arrays are between zero and the width of this AMT (2^bitWidth).
 // One of links or values arrays must contain zero elements and one must contain
 // at least one element since a node is strictly either a leaf or a non-leaf.
 type Node struct {
