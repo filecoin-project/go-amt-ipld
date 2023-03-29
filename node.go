@@ -527,3 +527,21 @@ func (n *node) getValue(i uint64) *cbg.Deferred {
 	}
 	return n.values[i]
 }
+func (n *node) clone() *node {
+	if n == nil {
+		return nil
+	}
+	clone := new(node)
+	if n.values != nil {
+		// these are immutable anyways.
+		clone.values = append(clone.values, n.values...)
+	}
+
+	if n.links != nil {
+		clone.links = make([]*link, len(n.links))
+		for i, l := range n.links {
+			clone.links[i] = l.clone()
+		}
+	}
+	return clone
+}

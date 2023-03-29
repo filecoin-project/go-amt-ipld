@@ -353,3 +353,15 @@ func (r *Root) Flush(ctx context.Context) (cid.Cid, error) {
 func (r *Root) Len() uint64 {
 	return r.count
 }
+
+func (r *Root) Clone() *Root {
+	return &Root{
+		bitWidth: r.bitWidth,
+		height:   r.height,
+		count:    r.count,
+
+		node: r.node.clone(),
+
+		store: r.store,
+	}
+}

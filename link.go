@@ -30,3 +30,14 @@ func (l *link) load(ctx context.Context, bs cbor.IpldStore, bitWidth uint, heigh
 	}
 	return l.cached, nil
 }
+
+func (l *link) clone() *link {
+	if l == nil {
+		return nil
+	}
+	return &link{
+		cid:    l.cid,
+		cached: l.cached.clone(),
+		dirty:  l.dirty,
+	}
+}
