@@ -1187,3 +1187,45 @@ func assertEquals(ctx context.Context, t testing.TB, a *Root, expected []cbg.CBO
 	}))
 	assertCount(t, a, uint64(len(expected)))
 }
+
+func TestCidStability(t *testing.T) {
+	const count = 500
+
+	bs := cbor.NewCborStore(newMockBlocks())
+	ctx := context.Background()
+	a, err := NewAMT(bs)
+	require.NoError(t, err)
+
+	cids := make([]cid.Cid, count)
+
+	// Add, flushing each time.
+	for i := 0; i < count; i++ {
+		c, err := a.Flush(ctx)
+		require.NoError(t, err)
+		cids[i] = c
+		assert.NoError(t, a.Set(ctx, uint64(i), cborstr(fmt.Sprintf("%d", i))))
+	}
+
+	// now go backwards
+	for i := count - 1; i >= 0; i-- {
+		found, err := a.Delete(ctx, uint64(i))
+		assert.NoError(t, err)
+		assert.True(t, found)
+		c, err := a.Flush(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, cids[i], c)
+	}
+
+	// now go backwards and start over.
+	a2, err := LoadAMT(ctx, bs, cids[len(cids)-1])
+	require.NoError(t, err)
+
+	for i := count - 2; i >= 0; i-- {
+		found, err := a2.Delete(ctx, uint64(i))
+		assert.NoError(t, err)
+		assert.True(t, found)
+		c, err := a2.Flush(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, cids[i], c)
+	}
+}
