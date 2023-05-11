@@ -414,7 +414,7 @@ func (s *diffScheduler) work(ctx context.Context, todo *task, results chan *Chan
 		}
 
 		// Both previous and current have links to diff
-		if prev.links[i].cid == cur.links[i].cid {
+		if prev.links[i].cid.Equals(cur.links[i].cid) {
 			continue
 		}
 
