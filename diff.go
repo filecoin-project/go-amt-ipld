@@ -263,6 +263,9 @@ func diffNode(ctx context.Context, prevCtx, curCtx *nodeContext, prev, cur *node
 		}
 
 		// Both previous and current have links to diff
+		if prev.links[i].cid == cur.links[i].cid {
+			continue
+		}
 
 		prevSubCtx := &nodeContext{
 			bs:       prevCtx.bs,
