@@ -321,6 +321,19 @@ func (r *Root) ForEachAt(ctx context.Context, start uint64, cb func(uint64, *cbg
 	return r.node.forEachAt(ctx, r.store, r.bitWidth, r.height, start, 0, cb)
 }
 
+// ForEachTrackedWithNodeSink iterates over the entire AMT and calls the cb function for each
+// entry found in the leaf nodes. The callback will receive the index and the
+// value of each element.
+func (r *Root) ForEachTrackedWithNodeSink(ctx context.Context, b *bytes.Buffer, sink cbg.CBORUnmarshaler, cb func(uint64, *cbg.Deferred, []int) error) error {
+	return r.node.forEachAtTrackedWithNodeSink(ctx, r.store, []int{}, r.bitWidth, r.height, 0, 0, b, sink, cb)
+}
+
+// ForEachAtTrackedWithNodeSink iterates over the AMT beginning from the given start index. See
+// ForEach for more details.
+func (r *Root) ForEachAtTrackedWithNodeSink(ctx context.Context, start uint64, b *bytes.Buffer, sink cbg.CBORUnmarshaler, cb func(uint64, *cbg.Deferred, []int) error) error {
+	return r.node.forEachAtTrackedWithNodeSink(ctx, r.store, []int{}, r.bitWidth, r.height, start, 0, b, sink, cb)
+}
+
 // FirstSetIndex finds the lowest index in this AMT that has a value set for
 // it. If this operation is called on an empty AMT, an ErrNoValues will be
 // returned.
