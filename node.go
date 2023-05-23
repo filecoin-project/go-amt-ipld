@@ -348,6 +348,145 @@ func (n *node) forEachAt(ctx context.Context, bs cbor.IpldStore, bitWidth uint, 
 	return nil
 }
 
+// Recursive implementation backing ForEach and ForEachAt. Performs a
+// depth-first walk of the tree, beginning at the 'start' index. The 'offset'
+// argument helps us locate the lateral position of the current node so we can
+// figure out the appropriate 'index', since indexes are not stored with values
+// and can only be determined by knowing how far a leaf node is removed from
+// the left-most leaf node.
+// This method also provides the trail of indices at each height/level in the way to the current node, which can be used to formulate a selector suffixes
+func (n *node) forEachAtTracked(ctx context.Context, bs cbor.IpldStore, trail []int, bitWidth uint, height int, start, offset uint64, cb func(uint64, *cbg.Deferred, []int) error) error {
+	if height == 0 {
+		// height=0 means we're at leaf nodes and get to use our callback
+		for i, v := range n.values {
+			if v != nil {
+				ix := offset + uint64(i)
+				if ix < start {
+					// if we're here, 'start' is probably somewhere in the
+					// middle of this node's elements
+					continue
+				}
+
+				// use 'offset' to determine the actual index for this element, it
+				// tells us how distant we are from the left-most leaf node
+				if err := cb(ix, v, append(trail, i)); err != nil {
+					return err
+				}
+			}
+		}
+
+		return nil
+	}
+
+	subCount := nodesForHeight(bitWidth, height)
+	for i, ln := range n.links {
+		if ln == nil {
+			continue
+		}
+
+		// 'offs' tells us the index of the left-most element of the subtree defined
+		// by 'sub'
+		offs := offset + (uint64(i) * subCount)
+		nextOffs := offs + subCount
+		// nextOffs > offs checks for overflow at MaxIndex (where the next offset wraps back
+		// to 0).
+		if nextOffs >= offs && start >= nextOffs {
+			// if we're here, 'start' lets us skip this entire sub-tree
+			continue
+		}
+
+		subn, err := ln.load(ctx, bs, bitWidth, height-1)
+		if err != nil {
+			return err
+		}
+
+		// recurse into the child node, providing 'offs' to tell it where it's
+		// located in the tree
+		if err := subn.forEachAtTracked(ctx, bs, append(trail, i), bitWidth, height-1, start, offs, cb); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// b *bytes.Buffer, sink func(node ipld.Node) error
+// Recursive implementation backing ForEach and ForEachAt. Performs a
+// depth-first walk of the tree, beginning at the 'start' index. The 'offset'
+// argument helps us locate the lateral position of the current node so we can
+// figure out the appropriate 'index', since indexes are not stored with values
+// and can only be determined by knowing how far a leaf node is removed from
+// the left-most leaf node.
+// This method also provides the trail of indices at each height/level in the way to the current node, which can be used to formulate a selector suffixes
+func (n *node) forEachAtTrackedWithNodeSink(ctx context.Context, bs cbor.IpldStore, trail []int, bitWidth uint, height int, start, offset uint64, b *bytes.Buffer, sink cbg.CBORUnmarshaler, cb func(uint64, *cbg.Deferred, []int) error) error {
+	if sink != nil {
+		if b == nil {
+			b = bytes.NewBuffer(nil)
+		}
+		b.Reset()
+		internalNode, err := n.compact(ctx, bitWidth, height)
+		if err != nil {
+			return err
+		}
+		if err := internalNode.MarshalCBOR(b); err != nil {
+			return err
+		}
+		if err := sink.UnmarshalCBOR(b); err != nil {
+			return err
+		}
+	}
+	if height == 0 {
+		// height=0 means we're at leaf nodes and get to use our callback
+		for i, v := range n.values {
+			if v != nil {
+				ix := offset + uint64(i)
+				if ix < start {
+					// if we're here, 'start' is probably somewhere in the
+					// middle of this node's elements
+					continue
+				}
+
+				// use 'offset' to determine the actual index for this element, it
+				// tells us how distant we are from the left-most leaf node
+				if err := cb(ix, v, append(trail, i)); err != nil {
+					return err
+				}
+			}
+		}
+
+		return nil
+	}
+
+	subCount := nodesForHeight(bitWidth, height)
+	for i, ln := range n.links {
+		if ln == nil {
+			continue
+		}
+
+		// 'offs' tells us the index of the left-most element of the subtree defined
+		// by 'sub'
+		offs := offset + (uint64(i) * subCount)
+		nextOffs := offs + subCount
+		// nextOffs > offs checks for overflow at MaxIndex (where the next offset wraps back
+		// to 0).
+		if nextOffs >= offs && start >= nextOffs {
+			// if we're here, 'start' lets us skip this entire sub-tree
+			continue
+		}
+
+		subn, err := ln.load(ctx, bs, bitWidth, height-1)
+		if err != nil {
+			return err
+		}
+
+		// recurse into the child node, providing 'offs' to tell it where it's
+		// located in the tree
+		if err := subn.forEachAtTracked(ctx, bs, append(trail, i), bitWidth, height-1, start, offs, cb); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 var errNoVals = fmt.Errorf("no values")
 
 // Recursive implementation of FirstSetIndex that's performed on the left-most
@@ -485,6 +624,37 @@ func (n *node) flush(ctx context.Context, bs cbor.IpldStore, bitWidth uint, heig
 
 			ln.cid = c
 			ln.dirty = false
+		}
+		nd.Links = append(nd.Links, ln.cid)
+		// set the bit in the bitmap for this position to indicate its presence
+		nd.Bmap[i/8] |= 1 << (uint(i) % 8)
+	}
+
+	return nd, nil
+}
+
+// compact converts a node into its internal.Node representation
+func (n *node) compact(ctx context.Context, bitWidth uint, height int) (*internal.Node, error) {
+	nd := new(internal.Node)
+	nd.Bmap = make([]byte, bmapBytes(bitWidth))
+
+	if height == 0 {
+		// leaf node, we're storing values in this node
+		for i, val := range n.values {
+			if val == nil {
+				continue
+			}
+			nd.Values = append(nd.Values, val)
+			// set the bit in the bitmap for this position to indicate its presence
+			nd.Bmap[i/8] |= 1 << (uint(i) % 8)
+		}
+		return nd, nil
+	}
+
+	// non-leaf node, we're only storing Links in this node
+	for i, ln := range n.links {
+		if ln == nil {
+			continue
 		}
 		nd.Links = append(nd.Links, ln.cid)
 		// set the bit in the bitmap for this position to indicate its presence
