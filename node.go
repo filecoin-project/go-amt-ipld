@@ -9,6 +9,7 @@ import (
 	"github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
 	cbg "github.com/whyrusleeping/cbor-gen"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/filecoin-project/go-amt-ipld/v4/internal"
 )
@@ -348,6 +349,203 @@ func (n *node) forEachAt(ctx context.Context, bs cbor.IpldStore, bitWidth uint, 
 	return nil
 }
 
+type descentContext struct {
+	height int
+	offset uint64
+}
+
+type child struct {
+	link *link
+	descentContext
+}
+
+type listChildren struct {
+	children []child
+}
+
+func (n *node) forEachAtParallel(ctx context.Context, bs cbor.IpldStore, bitWidth uint, height int, start, offset uint64, cb func(uint64, *cbg.Deferred) error, concurrency int) error {
+	// Setup synchronization
+	grp, errGrpCtx := errgroup.WithContext(ctx)
+	// Input and output queues for workers.
+	feed := make(chan *listChildren)
+	out := make(chan *listChildren)
+	done := make(chan struct{})
+
+	for i := 0; i < concurrency; i++ {
+		grp.Go(func() error {
+			for childrenList := range feed {
+				linksToVisit := make([]cid.Cid, 0, len(childrenList.children))
+				linksToVisitContext := make([]descentContext, 0, len(childrenList.children))
+				cachedNodes := make([]*node, 0, len(childrenList.children))
+				cachedNodesContext := make([]descentContext, 0, len(childrenList.children))
+				for _, child := range childrenList.children {
+					if child.link.cached != nil {
+						cachedNodes = append(cachedNodes, child.link.cached)
+						cachedNodesContext = append(cachedNodesContext, child.descentContext)
+					} else if child.link.cid != cid.Undef {
+						linksToVisit = append(linksToVisit, child.link.cid)
+						linksToVisitContext = append(linksToVisitContext, child.descentContext)
+					} else {
+						return fmt.Errorf("invalid child")
+					}
+				}
+
+				dserv := bs.(*cbor.BatchOpIpldStore)
+				nodes := make([]interface{}, len(linksToVisit))
+				for j := 0; j < len(linksToVisit); j++ {
+					nodes[j] = new(internal.Node)
+				}
+				cursorChan, missingCIDs, err := dserv.GetMany(errGrpCtx, linksToVisit, nodes)
+				if err != nil {
+					return err
+				}
+				if len(missingCIDs) != 0 {
+					return fmt.Errorf("GetMany returned an incomplete result set. The set is missing these CIDs: %+v", missingCIDs)
+				}
+				for cursor := range cursorChan {
+					if cursor.Err != nil {
+						return cursor.Err
+					}
+					internalNextNode, ok := nodes[cursor.Index].(*internal.Node)
+					if !ok {
+						return fmt.Errorf("expected node, got %T", nodes[cursor.Index])
+					}
+					nextNode, err := newNode(*internalNextNode, bitWidth, false, linksToVisitContext[cursor.Index].height == 0)
+					if err != nil {
+						return err
+					}
+					nextChildren, err := nextNode.walkChildren(ctx, bitWidth, linksToVisitContext[cursor.Index].height, start, linksToVisitContext[cursor.Index].offset, cb)
+					if err != nil {
+						return err
+					}
+					select {
+					case <-errGrpCtx.Done():
+						return nil
+					default:
+						if nextChildren != nil {
+							out <- nextChildren
+						}
+					}
+				}
+				for j, cachedNode := range cachedNodes {
+					nextChildren, err := cachedNode.walkChildren(ctx, bitWidth, cachedNodesContext[j].height, start, cachedNodesContext[j].offset, cb)
+					if err != nil {
+						return err
+					}
+					select {
+					case <-errGrpCtx.Done():
+						return nil
+					default:
+						if nextChildren != nil {
+							out <- nextChildren
+						}
+					}
+				}
+
+				select {
+				case done <- struct{}{}:
+				case <-errGrpCtx.Done():
+				}
+			}
+			return nil
+		})
+	}
+
+	send := feed
+	var todoQueue []*listChildren
+	var inProgress int
+
+	// start the walk
+	children, err := n.walkChildren(ctx, bitWidth, height, start, offset, cb)
+	// if we hit an error or there are no children, then we're done
+	if err != nil || children == nil {
+		close(feed)
+		grp.Wait()
+		return err
+	}
+	next := children
+
+dispatcherLoop:
+	for {
+		select {
+		case send <- next:
+			inProgress++
+			if len(todoQueue) > 0 {
+				next = todoQueue[0]
+				todoQueue = todoQueue[1:]
+			} else {
+				next = nil
+				send = nil
+			}
+		case <-done:
+			inProgress--
+			if inProgress == 0 && next == nil {
+				break dispatcherLoop
+			}
+		case nextNodes := <-out:
+			if next == nil {
+				next = nextNodes
+				send = feed
+			} else {
+				todoQueue = append(todoQueue, nextNodes)
+			}
+		case <-errGrpCtx.Done():
+			break dispatcherLoop
+		}
+	}
+	close(feed)
+	return grp.Wait()
+}
+
+func (n *node) walkChildren(ctx context.Context, bitWidth uint, height int, start, offset uint64, cb func(uint64, *cbg.Deferred) error) (*listChildren, error) {
+	if height == 0 {
+		// height=0 means we're at leaf nodes and get to use our callback
+		for i, v := range n.values {
+			if v != nil {
+				ix := offset + uint64(i)
+				if ix < start {
+					// if we're here, 'start' is probably somewhere in the
+					// middle of this node's elements
+					continue
+				}
+
+				// use 'offset' to determine the actual index for this element, it
+				// tells us how distant we are from the left-most leaf node
+				if err := cb(offset+uint64(i), v); err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		return nil, nil
+	}
+	children := make([]child, 0, len(n.links))
+
+	subCount := nodesForHeight(bitWidth, height)
+	for i, ln := range n.links {
+		if ln == nil {
+			continue
+		}
+
+		// 'offs' tells us the index of the left-most element of the subtree defined
+		// by 'sub'
+		offs := offset + (uint64(i) * subCount)
+		nextOffs := offs + subCount
+		// nextOffs > offs checks for overflow at MaxIndex (where the next offset wraps back
+		// to 0).
+		if nextOffs >= offs && start >= nextOffs {
+			// if we're here, 'start' lets us skip this entire sub-tree
+			continue
+		}
+		children = append(children, child{ln, descentContext{
+			height: height - 1,
+			offset: offs,
+		}})
+	}
+
+	return &listChildren{children: children}, nil
+}
+
 var errNoVals = fmt.Errorf("no values")
 
 // Recursive implementation of FirstSetIndex that's performed on the left-most
@@ -492,6 +690,76 @@ func (n *node) flush(ctx context.Context, bs cbor.IpldStore, bitWidth uint, heig
 	}
 
 	return nd, nil
+}
+
+// compact converts a node into its internal.Node representation
+func (n *node) compact(ctx context.Context, bitWidth uint, height int) (*internal.Node, error) {
+	nd := new(internal.Node)
+	nd.Bmap = make([]byte, bmapBytes(bitWidth))
+
+	if height == 0 {
+		// leaf node, we're storing values in this node
+		for i, val := range n.values {
+			if val == nil {
+				continue
+			}
+			nd.Values = append(nd.Values, val)
+			// set the bit in the bitmap for this position to indicate its presence
+			nd.Bmap[i/8] |= 1 << (uint(i) % 8)
+		}
+		return nd, nil
+	}
+
+	// non-leaf node, we're only storing Links in this node
+	for i, ln := range n.links {
+		if ln == nil {
+			continue
+		}
+		if ln.dirty {
+			if ln.cached == nil {
+				return nil, fmt.Errorf("expected dirty node to be cached")
+			}
+			subn, err := ln.cached.compact(ctx, bitWidth, height-1)
+			if err != nil {
+				return nil, err
+			}
+			c, err := calcCID(subn)
+			if err != nil {
+				return nil, err
+			}
+
+			ln.cid = c
+			ln.dirty = false
+		}
+		nd.Links = append(nd.Links, ln.cid)
+		// set the bit in the bitmap for this position to indicate its presence
+		nd.Bmap[i/8] |= 1 << (uint(i) % 8)
+	}
+
+	return nd, nil
+}
+
+func calcCID(node cbg.CBORMarshaler) (cid.Cid, error) {
+	mhType := cbor.DefaultMultihash
+	mhLen := -1
+	codec := uint64(cid.DagCBOR)
+
+	buf := new(bytes.Buffer)
+	if err := node.MarshalCBOR(buf); err != nil {
+		return cid.Undef, err
+	}
+
+	pref := cid.Prefix{
+		Codec:    codec,
+		MhType:   mhType,
+		MhLength: mhLen,
+		Version:  1,
+	}
+	c, err := pref.Sum(buf.Bytes())
+	if err != nil {
+		return cid.Undef, err
+	}
+	return c, nil
 }
 
 func (n *node) setLink(bitWidth uint, i uint64, l *link) {
