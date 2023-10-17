@@ -30,7 +30,6 @@ func init() {
 }
 
 var (
-	bitWidths3     = []uint{8}
 	bitWidths2to18 = []uint{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18}
 	bitWidths2to3  = []uint{2, 3}
 )

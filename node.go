@@ -390,7 +390,7 @@ func (n *node) forEachAtParallel(ctx context.Context, bs cbor.IpldStore, bitWidt
 					}
 				}
 
-				dserv := bs.(*cbor.BatchOpIpldStore)
+				dserv := bs.(cbor.IpldBatchOpStore)
 				nodes := make([]interface{}, len(linksToVisit))
 				for j := 0; j < len(linksToVisit); j++ {
 					nodes[j] = new(internal.Node)
