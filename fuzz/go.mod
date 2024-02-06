@@ -12,7 +12,7 @@ require (
 	github.com/ipfs/go-cid v0.4.0
 	github.com/ipfs/go-ipld-cbor v0.0.6
 	github.com/stephens2424/writerset v1.0.2
-	github.com/whyrusleeping/cbor-gen v0.0.0-20230126041949-52956bd4c9aa
+	github.com/whyrusleeping/cbor-gen v0.0.0-20240207022414-c5f90eb30d41
 )
 
 require (
