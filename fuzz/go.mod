@@ -1,6 +1,7 @@
 module github.com/filecoin-project/go-amt-ipld/fuzz
 
-go 1.20
+go 1.21
+
 
 replace github.com/filecoin-project/go-amt-ipld/v4 => ../
 
