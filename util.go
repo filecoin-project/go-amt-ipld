@@ -35,7 +35,6 @@ func cborToBytes(val cbg.CBORMarshaler) ([]byte, error) {
 	}()
 
 	if err := val.MarshalCBOR(valueBuf); err != nil {
-
 		return nil, err
 	}
 
