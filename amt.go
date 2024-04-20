@@ -1,7 +1,6 @@
 package amt
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -149,11 +148,11 @@ func (r *Root) Set(ctx context.Context, i uint64, val cbg.CBORMarshaler) error {
 	if val == nil {
 		d.Raw = cbg.CborNull
 	} else {
-		valueBuf := new(bytes.Buffer)
-		if err := val.MarshalCBOR(valueBuf); err != nil {
+		data, err := cborToBytes(val)
+		if err != nil {
 			return err
 		}
-		d.Raw = valueBuf.Bytes()
+		d.Raw = data
 	}
 
 	// where the index is greater than the number of elements we can fit into the
