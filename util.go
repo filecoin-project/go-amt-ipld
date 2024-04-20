@@ -20,7 +20,7 @@ func nodesForHeight(bitWidth uint, height int) uint64 {
 	return 1 << heightLogTwo
 }
 
-var bufferPool sync.Pool = sync.Pool{
+var bufferPool = sync.Pool{
 	New: func() any {
 		return bytes.NewBuffer(nil)
 	},
