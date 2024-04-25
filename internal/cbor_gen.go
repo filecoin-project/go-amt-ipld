@@ -149,7 +149,7 @@ func (t *Node) MarshalCBOR(w io.Writer) error {
 	}
 
 	// t.Bmap ([]uint8) (slice)
-	if len(t.Bmap) > cbg.ByteArrayMaxLen {
+	if len(t.Bmap) > 2097152 {
 		return xerrors.Errorf("Byte array in field t.Bmap was too long")
 	}
 
@@ -157,12 +157,12 @@ func (t *Node) MarshalCBOR(w io.Writer) error {
 		return err
 	}
 
-	if _, err := cw.Write(t.Bmap[:]); err != nil {
+	if _, err := cw.Write(t.Bmap); err != nil {
 		return err
 	}
 
 	// t.Links ([]cid.Cid) (slice)
-	if len(t.Links) > cbg.MaxLength {
+	if len(t.Links) > 8192 {
 		return xerrors.Errorf("Slice value in field t.Links was too long")
 	}
 
@@ -170,13 +170,15 @@ func (t *Node) MarshalCBOR(w io.Writer) error {
 		return err
 	}
 	for _, v := range t.Links {
-		if err := cbg.WriteCid(w, v); err != nil {
-			return xerrors.Errorf("failed writing cid field t.Links: %w", err)
+
+		if err := cbg.WriteCid(cw, v); err != nil {
+			return xerrors.Errorf("failed to write cid field v: %w", err)
 		}
+
 	}
 
 	// t.Values ([]*typegen.Deferred) (slice)
-	if len(t.Values) > cbg.MaxLength {
+	if len(t.Values) > 8192 {
 		return xerrors.Errorf("Slice value in field t.Values was too long")
 	}
 
@@ -187,6 +189,7 @@ func (t *Node) MarshalCBOR(w io.Writer) error {
 		if err := v.MarshalCBOR(cw); err != nil {
 			return err
 		}
+
 	}
 	return nil
 }
@@ -221,7 +224,7 @@ func (t *Node) UnmarshalCBOR(r io.Reader) (err error) {
 		return err
 	}
 
-	if extra > cbg.ByteArrayMaxLen {
+	if extra > 2097152 {
 		return fmt.Errorf("t.Bmap: byte array too large (%d)", extra)
 	}
 	if maj != cbg.MajByteString {
@@ -232,9 +235,10 @@ func (t *Node) UnmarshalCBOR(r io.Reader) (err error) {
 		t.Bmap = make([]uint8, extra)
 	}
 
-	if _, err := io.ReadFull(cr, t.Bmap[:]); err != nil {
+	if _, err := io.ReadFull(cr, t.Bmap); err != nil {
 		return err
 	}
+
 	// t.Links ([]cid.Cid) (slice)
 
 	maj, extra, err = cr.ReadHeader()
@@ -242,7 +246,7 @@ func (t *Node) UnmarshalCBOR(r io.Reader) (err error) {
 		return err
 	}
 
-	if extra > cbg.MaxLength {
+	if extra > 8192 {
 		return fmt.Errorf("t.Links: array too large (%d)", extra)
 	}
 
@@ -255,14 +259,27 @@ func (t *Node) UnmarshalCBOR(r io.Reader) (err error) {
 	}
 
 	for i := 0; i < int(extra); i++ {
+		{
+			var maj byte
+			var extra uint64
+			var err error
+			_ = maj
+			_ = extra
+			_ = err
 
-		c, err := cbg.ReadCid(cr)
-		if err != nil {
-			return xerrors.Errorf("reading cid field t.Links failed: %w", err)
+			{
+
+				c, err := cbg.ReadCid(cr)
+				if err != nil {
+					return xerrors.Errorf("failed to read cid field t.Links[i]: %w", err)
+				}
+
+				t.Links[i] = c
+
+			}
+
 		}
-		t.Links[i] = c
 	}
-
 	// t.Values ([]*typegen.Deferred) (slice)
 
 	maj, extra, err = cr.ReadHeader()
@@ -270,7 +287,7 @@ func (t *Node) UnmarshalCBOR(r io.Reader) (err error) {
 		return err
 	}
 
-	if extra > cbg.MaxLength {
+	if extra > 8192 {
 		return fmt.Errorf("t.Values: array too large (%d)", extra)
 	}
 
@@ -283,14 +300,24 @@ func (t *Node) UnmarshalCBOR(r io.Reader) (err error) {
 	}
 
 	for i := 0; i < int(extra); i++ {
+		{
+			var maj byte
+			var extra uint64
+			var err error
+			_ = maj
+			_ = extra
+			_ = err
 
-		var v cbg.Deferred
-		if err := v.UnmarshalCBOR(cr); err != nil {
-			return err
+			{
+
+				t.Values[i] = new(cbg.Deferred)
+
+				if err := t.Values[i].UnmarshalCBOR(cr); err != nil {
+					return xerrors.Errorf("failed to read deferred field: %w", err)
+				}
+			}
+
 		}
-
-		t.Values[i] = &v
 	}
-
 	return nil
 }
