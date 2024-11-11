@@ -8,7 +8,7 @@ require (
 	github.com/ipfs/go-ipld-cbor v0.2.0
 	github.com/stretchr/testify v1.9.0
 	github.com/whyrusleeping/cbor-gen v0.2.0
-	golang.org/x/sync v0.8.0
+	golang.org/x/sync v0.9.0
 	golang.org/x/xerrors v0.0.0-20240716161551-93cc26a95ae9
 )
 
