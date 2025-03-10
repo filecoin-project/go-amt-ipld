@@ -1,6 +1,7 @@
 module github.com/filecoin-project/go-amt-ipld/v4
 
-go 1.23
+go 1.23.0
+
 require (
 	github.com/ipfs/go-block-format v0.2.0
 	github.com/ipfs/go-cid v0.5.0
