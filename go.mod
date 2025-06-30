@@ -17,7 +17,6 @@ require (
 	github.com/ipfs/boxo v0.32.0 // indirect
 	github.com/ipfs/go-ipld-format v0.6.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
-	github.com/kr/pretty v0.1.0 // indirect
 	github.com/minio/sha256-simd v1.0.1 // indirect
 	github.com/mr-tron/base58 v1.2.0 // indirect
 	github.com/multiformats/go-base32 v0.1.0 // indirect
@@ -30,7 +29,6 @@ require (
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	golang.org/x/crypto v0.39.0 // indirect
 	golang.org/x/sys v0.33.0 // indirect
-	gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	lukechampine.com/blake3 v1.4.1 // indirect
 )
