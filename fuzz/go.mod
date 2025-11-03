@@ -11,7 +11,7 @@ require (
 	github.com/elazarl/go-bindata-assetfs v1.0.1
 	github.com/filecoin-project/go-amt-ipld/v4 v4.4.0
 	github.com/ipfs/go-block-format v0.2.3
-	github.com/ipfs/go-cid v0.5.0
+	github.com/ipfs/go-cid v0.6.0
 	github.com/ipfs/go-ipld-cbor v0.2.1
 	github.com/stephens2424/writerset v1.0.2
 	github.com/whyrusleeping/cbor-gen v0.3.1
@@ -27,7 +27,7 @@ require (
 	github.com/multiformats/go-base36 v0.2.0 // indirect
 	github.com/multiformats/go-multibase v0.2.0 // indirect
 	github.com/multiformats/go-multihash v0.2.3 // indirect
-	github.com/multiformats/go-varint v0.0.7 // indirect
+	github.com/multiformats/go-varint v0.1.0 // indirect
 	github.com/polydawn/refmt v0.89.0 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	golang.org/x/crypto v0.41.0 // indirect
