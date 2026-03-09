@@ -1,6 +1,6 @@
 module github.com/filecoin-project/go-amt-ipld/fuzz
 
-go 1.25
+go 1.25.0
 
 replace github.com/filecoin-project/go-amt-ipld/v4 => ../
 
@@ -30,7 +30,7 @@ require (
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	golang.org/x/crypto v0.45.0 // indirect
 	golang.org/x/mod v0.27.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/tools v0.36.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
