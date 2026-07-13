@@ -3,6 +3,5 @@ updates:
   - package-ecosystem: "gomod"
     directories:
       - "/"
-      - "/fuzz/"
     schedule:
       interval: "monthly"

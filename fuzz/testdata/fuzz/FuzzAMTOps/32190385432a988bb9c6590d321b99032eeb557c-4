@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("rr\n\t}\n\n\tif maj != bor byte strings\")\n\t}\n\n\tif(\"{{ .Name }s too large\")0 {\n\t\tbuf := make([]byte, extra)\n\tReadFull(cr, buf); err != nil {\n\t\t\treturn err\n\t\t}\n\t\t{{ .Name }} = big.NewInt(0).SetBy{\n\t\t{{ .Name }} = big.NewInt(0)\n\t}\n")

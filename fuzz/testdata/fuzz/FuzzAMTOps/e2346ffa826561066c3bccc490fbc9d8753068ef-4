@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("\xe1\n\tif len({{ .Name }}) > {{ MaxLen .MaxLen \"Bytes\" }} {\n\t\treturn xerrors.Errorf(\"Byte array in field {{ .Name }} was too long\")\n\t}\n\n\t{{ if .PreserveNil }}\n\tif {{ .Name }} == nil {\n\t\t_, err := w.Write(cbg.CborNull)\n\t\tif err != nil {\n\t\t\treturn err\n\t\t}\n\t} else {\n\t{{ end }}\n\t\t{{ MajorType \"cw\" \"cbg.MajByteString\" (print \"len(\" .Name \")\" ) }}\n\n\t\tif _, err := cw.Write({{ .Name }}); err != nil {\n\t\t\treturn err\n\t\t}\n\t{{ if .PreserveNil }}\n\t}\n\t{{ end")

@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("// contains filtered or unexported methods\x80C\x00\x1d\xff\x80\xbfｿ")

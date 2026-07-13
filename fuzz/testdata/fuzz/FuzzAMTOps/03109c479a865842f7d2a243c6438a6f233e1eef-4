@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("\n\tif len({{ .Name }}) > {{ MaxLen .MaxLen \"Array\" }} {\n\t\treturn xerrors.Errorf(\"Slice value in field {{ .Name }} was too long\")\n\t}\n\n\t{{ MajorType \"cw\" \"cbg.MajArray\" ( print \"len(\" .Name \")\" ) }}\n\tfor _, v range {{ .Name}} ")

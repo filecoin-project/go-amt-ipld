@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("XenVMMXe����\uffff\xbd\xbf\xbf\xbd��\xef\xef, found in string literal\xbf\xbd��\x8f")

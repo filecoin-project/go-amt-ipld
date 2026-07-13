@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("pected intz45793545999416\xbf\xbd�!�\xbe")
