@@ -1,10 +1,11 @@
 version: 2
 updates:
   - package-ecosystem: "gomod"
-    directory: "/"
+    directories:
+      - "/"
+      - "/fuzz/"
     schedule:
-      interval: "weekly"
-  - package-ecosystem: "gomod"
-    directory: "/fuzz/"
-    schedule:
-      interval: "weekly"
+      interval: "monthly"
+    groups:
+      shared-dependencies:
+        group-by: "dependency-name"
