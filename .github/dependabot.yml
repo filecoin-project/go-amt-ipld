@@ -6,6 +6,3 @@ updates:
       - "/fuzz/"
     schedule:
       interval: "monthly"
-    groups:
-      shared-dependencies:
-        group-by: "dependency-name"
