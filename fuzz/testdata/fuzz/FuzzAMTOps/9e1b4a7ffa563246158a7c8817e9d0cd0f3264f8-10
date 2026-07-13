@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("s\xfe\xff\xff\xff\xff\xff\xff\xffginhs\x80$\xef\xbdByte array inPrimarunbalanced label// Code generatedyrusleeping/cbor-gen. DO NOT EDIT.\n\npackage {{ .Package }}\n\nimport (\n\t\"fmt\"\n\t\"io\"\n\t\"math\"\n\t\"sort\"\n\ny{ range .Imports }}{{ .Name }} \"{{ .PkgPath }}\"\n{{ end }}\n)\n\n\nva\npackage {{ .Packa\x97e }r _ = xerrors.Errorf\nvar _ = cid.Undef\nvar\x00@ = math.E\nvar _ = sort.Sort\n\n scopesyExpr")

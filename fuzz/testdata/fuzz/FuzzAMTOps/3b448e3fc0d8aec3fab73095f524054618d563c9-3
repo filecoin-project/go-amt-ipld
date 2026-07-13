@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("\n\tif {{ .Name }} == nil {\n\t\tif _, err := cw.Write(cbg.CborNull); err != nil {\n\t\t\treturn err\n\t\t}\n\t} else {\n\t\tif len(*{{ .Name }}) > {{ MaxLen .MaxLen \"String\" }} {\n\t\t\treturn xerrors.Errorf(\"Value in f {{ .Name | js }} was too long\")\n\t\t}\n\n\t\t{{ MajorType \"cw\" \"cbg.MajTextString\" (print \"len(*\" .Name \")\") }}\n\t\tif _, err := cw.WriteString(string(*{{ .Name }})); err != nil {\n\t\t\ttun")

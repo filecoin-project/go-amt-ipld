@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("\n\tif len({{ .Name axLen \"Array\" }} {\n\t\treturn xerroralue in field {{ .Name }} was too long\")\n\t}\n\n\t{{ Macw\" \"cbg.MajArray\"me \")\" ) }}\nfor _, v := range {{  ")

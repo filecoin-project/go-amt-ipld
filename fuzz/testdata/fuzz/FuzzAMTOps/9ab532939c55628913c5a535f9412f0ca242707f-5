@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("$\xfe\xff\xff\xff\xff\xff\xff\xff\x80C\x00\x1d\xff\x80\xbf\xef\xbdByte array inPrim, err := cw.Write(cbg.CborNull); err != nil {\n\t\t\treturn err\n\t\t}\n\t} else {\n\t\tif err := cbg.WriteCid(cw, *{{ .Name }}); err != nil {\n\t\t\trerf\x84\"fa�|�\x1f�\x1eEailed to write cid field {{ .Name }}: %w\", err)\n\t\t=\n\t}\n{{ else }}\n\tif err := cbg.WriteCid(cw, {{ .Name }}); err != nil {\n\t\treturn xerrors.Errorf(\"fa led to write cidifield {{ .Name }}:  err)\n\t}\n{{ end}}\n")

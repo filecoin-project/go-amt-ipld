@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("\xe1\n\tif len({{ .Name }}) > {{ MaxLen .MaxLen \"Bytes\" }{{ if .PreserveNil }}\n\tif {{ .Name }} == nil {\n\t\t_, err != nil {\n\t\t\t else {\n\t{{ end }}\n\t\t{{ MajorType \"cw\" \"cbg.MajByteS")

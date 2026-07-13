@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("d \n{{ if .Pointer }}\n\tif {{ .Name }} == nil {\n\t\tif _, err := cw.Write(cbg.CborNull); err != nil {\n\t\t\treturn err\n\t\t}\n\t} else {\n\t\tif err := cbg.WriteCid(cw, *{{ .Name }}); err != nil {\n\t\t\treturn xerrors.Errorf\x84\"fa�|�\x1f�\x1eEailed to write cid field {{ .Name }}: %w\", err)\n\t\t}\n\t}\n{{ else }}\n\tif err := cbg.WriteCid(cw, {{ .Name }}); err != nil {\n\t\treturn xerrors.Errorf(\"failed to write cid field {{ .Name }}: %w\", err)\n\t}\n{{ end }}\nintz4579qE&")

@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("pected\uf77d\x18\x00@\x00 \x00\x00\n\tif maj \t\t{{ g.MajArray {\n\t\treturn fmt.Errorf(\"expected cbor array\")\n\t}\n\t{{ if .PreserveNil }}\n\t{{ .Name }} = make({{ .TypeName }}, extra)\n\t{{ else }}\n\tif extra > 0 {\n\t\t{{ .Name }} = make({{ .TypeName }}, extra)\n\t}\n\t{{ end }}\n\tfor {{ .IterLabel }} := 0; {{ .IterLabel }} < int(extra); {{ .IterLabel }}++ {\n\x00i")
