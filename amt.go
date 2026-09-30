@@ -151,7 +151,9 @@ func (n *Node) get(ctx context.Context, bs cbor.IpldStore, height int, i uint64,
 		return &ErrNotFound{i}
 	}
 	if height == 0 {
-		n.expandValues()
+		if err := n.expandValues(); err != nil {
+			return err
+		}
 
 		d := n.expVals[i]
 
@@ -215,7 +217,9 @@ func (n *Node) delete(ctx context.Context, bs cbor.IpldStore, height int, i uint
 		return &ErrNotFound{i}
 	}
 	if height == 0 {
-		n.expandValues()
+		if err := n.expandValues(); err != nil {
+			return err
+		}
 
 		n.expVals[i] = nil
 		n.clearBit(i)
@@ -259,7 +263,9 @@ func (r *Root) ForEachAt(ctx context.Context, start uint64, cb func(uint64, *cbg
 
 func (n *Node) forEachAt(ctx context.Context, bs cbor.IpldStore, height int, start, offset uint64, cb func(uint64, *cbg.Deferred) error) error {
 	if height == 0 {
-		n.expandValues()
+		if err := n.expandValues(); err != nil {
+			return err
+		}
 
 		for i, v := range n.expVals {
 			if v != nil {
@@ -278,7 +284,9 @@ func (n *Node) forEachAt(ctx context.Context, bs cbor.IpldStore, height int, sta
 	}
 
 	if n.cache == nil {
-		n.expandLinks()
+		if err := n.expandLinks(); err != nil {
+			return err
+		}
 	}
 
 	subCount := nodesForHeight(height)
@@ -316,7 +324,9 @@ var errNoVals = fmt.Errorf("no values")
 
 func (n *Node) firstSetIndex(ctx context.Context, bs cbor.IpldStore, height int) (uint64, error) {
 	if height == 0 {
-		n.expandValues()
+		if err := n.expandValues(); err != nil {
+			return 0, err
+		}
 		for i, v := range n.expVals {
 			if v != nil {
 				return uint64(i), nil
@@ -327,7 +337,9 @@ func (n *Node) firstSetIndex(ctx context.Context, bs cbor.IpldStore, height int)
 	}
 
 	if n.cache == nil {
-		n.expandLinks()
+		if err := n.expandLinks(); err != nil {
+			return 0, err
+		}
 	}
 
 	for i := 0; i < width; i++ {
@@ -351,23 +363,44 @@ func (n *Node) firstSetIndex(ctx context.Context, bs cbor.IpldStore, height int)
 	return 0, errNoVals
 }
 
-func (n *Node) expandValues() {
+// expandValues scatters n.Values across n.expVals according to the bitmap.
+//
+// Bmap and Values are decoded as independent CBOR fields and nothing else
+// cross-checks them, so the two can disagree. Indexing Values by the bitmap's
+// popcount would then run past the end of the slice, so check that they agree
+// before scattering. v3 and v4 validate the same invariant in newNode.
+func (n *Node) expandValues() error {
 	if len(n.expVals) == 0 {
 		n.expVals = make([]*cbg.Deferred, width)
+		count := 0
 		for x := uint64(0); x < width; x++ {
 			set, ix := n.getBit(x)
 			if set {
+				if ix >= len(n.Values) {
+					// too many bits were set in the bitmap for the number of values
+					// available
+					return fmt.Errorf("expected at least %d values, found %d", ix+1, len(n.Values))
+				}
 				n.expVals[x] = n.Values[ix]
+				count++
 			}
 		}
+		if count != len(n.Values) {
+			// the number of bits set in the bitmap was not the same as the number of
+			// values in the array
+			return fmt.Errorf("expected %d values, got %d", count, len(n.Values))
+		}
 	}
+	return nil
 }
 
 func (n *Node) set(ctx context.Context, bs cbor.IpldStore, height int, i uint64, val *cbg.Deferred) (bool, error) {
 	//nfh := nodesForHeight(height)
 	//fmt.Printf("[set] h: %d, i: %d, subi: %d\n", height, i, i/nfh)
 	if height == 0 {
-		n.expandValues()
+		if err := n.expandValues(); err != nil {
+			return false, err
+		}
 		alreadySet, _ := n.getBit(i)
 		n.expVals[i] = val
 		n.setBit(i)
@@ -428,20 +461,37 @@ func (n *Node) clearBit(i uint64) {
 	n.Bmap[0] = n.Bmap[0] & mask
 }
 
-func (n *Node) expandLinks() {
+// expandLinks is expandValues' sibling for internal nodes, and needs the same
+// bitmap-versus-slice check.
+func (n *Node) expandLinks() error {
 	n.cache = make([]*Node, width)
 	n.expLinks = make([]cid.Cid, width)
+	count := 0
 	for x := uint64(0); x < width; x++ {
 		set, ix := n.getBit(x)
 		if set {
+			if ix >= len(n.Links) {
+				// too many bits were set in the bitmap for the number of links
+				// available
+				return fmt.Errorf("expected at least %d links, found %d", ix+1, len(n.Links))
+			}
 			n.expLinks[x] = n.Links[ix]
+			count++
 		}
 	}
+	if count != len(n.Links) {
+		// the number of bits set in the bitmap was not the same as the number of
+		// links in the array
+		return fmt.Errorf("expected %d links, got %d", count, len(n.Links))
+	}
+	return nil
 }
 
 func (n *Node) loadNode(ctx context.Context, bs cbor.IpldStore, i uint64, create bool) (*Node, error) {
 	if n.cache == nil {
-		n.expandLinks()
+		if err := n.expandLinks(); err != nil {
+			return nil, err
+		}
 	} else {
 		if n := n.cache[i]; n != nil {
 			return n, nil
