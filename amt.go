@@ -363,12 +363,8 @@ func (n *Node) firstSetIndex(ctx context.Context, bs cbor.IpldStore, height int)
 	return 0, errNoVals
 }
 
-// expandValues scatters n.Values across n.expVals according to the bitmap.
-//
-// Bmap and Values are decoded as independent CBOR fields and nothing else
-// cross-checks them, so the two can disagree. Indexing Values by the bitmap's
-// popcount would then run past the end of the slice, so check that they agree
-// before scattering. v3 and v4 validate the same invariant in newNode.
+// expandValues scatters n.Values across n.expVals by bitmap position, erroring
+// if the bitmap and Values disagree. n.expVals is only set on success.
 func (n *Node) expandValues() error {
 	if len(n.expVals) == 0 {
 		expVals := make([]*cbg.Deferred, width)
@@ -377,8 +373,6 @@ func (n *Node) expandValues() error {
 			set, ix := n.getBit(x)
 			if set {
 				if ix >= len(n.Values) {
-					// too many bits were set in the bitmap for the number of values
-					// available
 					return fmt.Errorf("expected at least %d values, found %d", ix+1, len(n.Values))
 				}
 				expVals[x] = n.Values[ix]
@@ -386,8 +380,6 @@ func (n *Node) expandValues() error {
 			}
 		}
 		if count != len(n.Values) {
-			// the number of bits set in the bitmap was not the same as the number of
-			// values in the array
 			return fmt.Errorf("expected %d values, got %d", count, len(n.Values))
 		}
 		n.expVals = expVals
@@ -462,8 +454,8 @@ func (n *Node) clearBit(i uint64) {
 	n.Bmap[0] = n.Bmap[0] & mask
 }
 
-// expandLinks is expandValues' sibling for internal nodes, and needs the same
-// bitmap-versus-slice check.
+// expandLinks is expandValues for Links; n.expLinks and n.cache are only set on
+// success.
 func (n *Node) expandLinks() error {
 	expLinks := make([]cid.Cid, width)
 	count := 0
@@ -471,8 +463,6 @@ func (n *Node) expandLinks() error {
 		set, ix := n.getBit(x)
 		if set {
 			if ix >= len(n.Links) {
-				// too many bits were set in the bitmap for the number of links
-				// available
 				return fmt.Errorf("expected at least %d links, found %d", ix+1, len(n.Links))
 			}
 			expLinks[x] = n.Links[ix]
@@ -480,8 +470,6 @@ func (n *Node) expandLinks() error {
 		}
 	}
 	if count != len(n.Links) {
-		// the number of bits set in the bitmap was not the same as the number of
-		// links in the array
 		return fmt.Errorf("expected %d links, got %d", count, len(n.Links))
 	}
 	n.expLinks = expLinks
