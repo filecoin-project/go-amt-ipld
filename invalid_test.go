@@ -19,7 +19,7 @@ func storeRoot(t *testing.T, mb *mockBlocks, r *Root) cid.Cid {
 	buf := new(bytes.Buffer)
 	require.NoError(t, r.MarshalCBOR(buf))
 	blk := block.NewBlock(buf.Bytes())
-	require.NoError(t, mb.Put(blk))
+	require.NoError(t, mb.Put(context.Background(), blk))
 	return blk.Cid()
 }
 
