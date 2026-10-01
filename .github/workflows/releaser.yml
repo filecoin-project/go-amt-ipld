@@ -1,0 +1,19 @@
+name: Releaser
+
+on:
+  push:
+    paths: [ 'version.json' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  releaser:
+    uses: ipdxco/unified-github-workflows/.github/workflows/releaser.yml@d9b156f4be9fae6843707f5e5cda2fb079f821ac # v1.0.45
+    with:
+      branches: '["release/v2"]'
