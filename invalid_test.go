@@ -33,56 +33,49 @@ func loadStoredRoot(t *testing.T, r *Root) (*Root, context.Context) {
 	return loaded, ctx
 }
 
-// A leaf whose bitmap claims one entry while Values is empty.
-func bitmapExceedsValues() *Root {
-	return &Root{Count: 1, Node: Node{Bmap: [...]byte{0x01}}}
+func malformedRoots() map[string]*Root {
+	two := []*cbg.Deferred{{Raw: []byte{0x01}}, {Raw: []byte{0x02}}}
+	link := block.NewBlock([]byte{0x80}).Cid()
+	return map[string]*Root{
+		// a leaf whose bitmap claims one entry while Values is empty
+		"bitmap exceeds values": {Count: 1, Node: Node{Bmap: [...]byte{0x01}}},
+		// a leaf with more Values than bits set
+		"values exceed bitmap": {Count: 1, Node: Node{Bmap: [...]byte{0x01}, Values: two}},
+		// the same one level up, where set bits are read as links
+		"bitmap exceeds links": {Height: 1, Count: 1, Node: Node{Bmap: [...]byte{0x01}}},
+		"links exceed bitmap":  {Height: 1, Count: 1, Node: Node{Bmap: [...]byte{0x01}, Links: []cid.Cid{link, link}}},
+	}
 }
 
-// The same one level up, where the set bit is read as a link.
-func bitmapExceedsLinks() *Root {
-	return &Root{Height: 1, Count: 1, Node: Node{Bmap: [...]byte{0x01}}}
+var invalidOps = map[string]func(context.Context, *Root) error{
+	"ForEach": func(ctx context.Context, a *Root) error {
+		return a.ForEach(ctx, func(uint64, *cbg.Deferred) error { return nil })
+	},
+	"Get": func(ctx context.Context, a *Root) error {
+		var out cbg.Deferred
+		return a.Get(ctx, 0, &out)
+	},
+	"FirstSetIndex": func(ctx context.Context, a *Root) error {
+		_, err := a.FirstSetIndex(ctx)
+		return err
+	},
+	"Delete": func(ctx context.Context, a *Root) error {
+		return a.Delete(ctx, 0)
+	},
+	"Set": func(ctx context.Context, a *Root) error {
+		return a.Set(ctx, 0, "foo")
+	},
 }
 
-func TestInvalidBitmapValuesForEach(t *testing.T) {
-	a, ctx := loadStoredRoot(t, bitmapExceedsValues())
-	require.Error(t, a.ForEach(ctx, func(uint64, *cbg.Deferred) error { return nil }))
-}
-
-func TestInvalidBitmapValuesGet(t *testing.T) {
-	a, ctx := loadStoredRoot(t, bitmapExceedsValues())
-	var out cbg.Deferred
-	require.Error(t, a.Get(ctx, 0, &out))
-}
-
-func TestInvalidBitmapValuesFirstSetIndex(t *testing.T) {
-	a, ctx := loadStoredRoot(t, bitmapExceedsValues())
-	_, err := a.FirstSetIndex(ctx)
-	require.Error(t, err)
-}
-
-func TestInvalidBitmapValuesDelete(t *testing.T) {
-	a, ctx := loadStoredRoot(t, bitmapExceedsValues())
-	require.Error(t, a.Delete(ctx, 0))
-}
-
-func TestInvalidBitmapValuesSet(t *testing.T) {
-	a, ctx := loadStoredRoot(t, bitmapExceedsValues())
-	require.Error(t, a.Set(ctx, 0, "foo"))
-}
-
-func TestInvalidBitmapLinksForEach(t *testing.T) {
-	a, ctx := loadStoredRoot(t, bitmapExceedsLinks())
-	require.Error(t, a.ForEach(ctx, func(uint64, *cbg.Deferred) error { return nil }))
-}
-
-func TestInvalidBitmapLinksGet(t *testing.T) {
-	a, ctx := loadStoredRoot(t, bitmapExceedsLinks())
-	var out cbg.Deferred
-	require.Error(t, a.Get(ctx, 0, &out))
-}
-
-func TestInvalidBitmapLinksFirstSetIndex(t *testing.T) {
-	a, ctx := loadStoredRoot(t, bitmapExceedsLinks())
-	_, err := a.FirstSetIndex(ctx)
-	require.Error(t, err)
+// Each operation must fail, and keep failing on the same loaded root.
+func TestInvalidBitmap(t *testing.T) {
+	for rname, r := range malformedRoots() {
+		for oname, op := range invalidOps {
+			t.Run(rname+"/"+oname, func(t *testing.T) {
+				a, ctx := loadStoredRoot(t, r)
+				require.Error(t, op(ctx, a))
+				require.Error(t, op(ctx, a))
+			})
+		}
+	}
 }

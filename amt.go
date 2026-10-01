@@ -371,7 +371,7 @@ func (n *Node) firstSetIndex(ctx context.Context, bs cbor.IpldStore, height int)
 // before scattering. v3 and v4 validate the same invariant in newNode.
 func (n *Node) expandValues() error {
 	if len(n.expVals) == 0 {
-		n.expVals = make([]*cbg.Deferred, width)
+		expVals := make([]*cbg.Deferred, width)
 		count := 0
 		for x := uint64(0); x < width; x++ {
 			set, ix := n.getBit(x)
@@ -381,7 +381,7 @@ func (n *Node) expandValues() error {
 					// available
 					return fmt.Errorf("expected at least %d values, found %d", ix+1, len(n.Values))
 				}
-				n.expVals[x] = n.Values[ix]
+				expVals[x] = n.Values[ix]
 				count++
 			}
 		}
@@ -390,6 +390,7 @@ func (n *Node) expandValues() error {
 			// values in the array
 			return fmt.Errorf("expected %d values, got %d", count, len(n.Values))
 		}
+		n.expVals = expVals
 	}
 	return nil
 }
@@ -464,8 +465,7 @@ func (n *Node) clearBit(i uint64) {
 // expandLinks is expandValues' sibling for internal nodes, and needs the same
 // bitmap-versus-slice check.
 func (n *Node) expandLinks() error {
-	n.cache = make([]*Node, width)
-	n.expLinks = make([]cid.Cid, width)
+	expLinks := make([]cid.Cid, width)
 	count := 0
 	for x := uint64(0); x < width; x++ {
 		set, ix := n.getBit(x)
@@ -475,7 +475,7 @@ func (n *Node) expandLinks() error {
 				// available
 				return fmt.Errorf("expected at least %d links, found %d", ix+1, len(n.Links))
 			}
-			n.expLinks[x] = n.Links[ix]
+			expLinks[x] = n.Links[ix]
 			count++
 		}
 	}
@@ -484,6 +484,8 @@ func (n *Node) expandLinks() error {
 		// links in the array
 		return fmt.Errorf("expected %d links, got %d", count, len(n.Links))
 	}
+	n.expLinks = expLinks
+	n.cache = make([]*Node, width)
 	return nil
 }
 
