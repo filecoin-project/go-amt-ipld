@@ -5,3 +5,21 @@ updates:
       - "/"
     schedule:
       interval: "monthly"
+  - package-ecosystem: "github-actions"
+    directories:
+      - "/"
+    schedule:
+      interval: "monthly"
+  # Lotus still decodes legacy state with v2
+  - package-ecosystem: "gomod"
+    target-branch: "release/v2"
+    directories:
+      - "/"
+    schedule:
+      interval: "monthly"
+  - package-ecosystem: "github-actions"
+    target-branch: "release/v2"
+    directories:
+      - "/"
+    schedule:
+      interval: "monthly"
