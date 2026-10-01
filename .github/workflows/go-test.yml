@@ -1,0 +1,23 @@
+name: Go Test
+
+on:
+  pull_request:
+  push:
+    branches: ["release/v2"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-test:
+    uses: ipdxco/unified-github-workflows/.github/workflows/go-test.yml@d9b156f4be9fae6843707f5e5cda2fb079f821ac # v1.0.45
+    with:
+      # go.mod's go directive (1.12) predates the toolchains CI can run, so pin them
+      go-versions: '["1.25.x", "1.26.x"]'
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

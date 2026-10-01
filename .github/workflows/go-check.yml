@@ -1,0 +1,21 @@
+name: Go Checks
+
+on:
+  pull_request:
+  push:
+    branches: ["release/v2"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-check:
+    uses: ipdxco/unified-github-workflows/.github/workflows/go-check.yml@d9b156f4be9fae6843707f5e5cda2fb079f821ac # v1.0.45
+    with:
+      # go.mod's go directive (1.12) predates the toolchains CI can run, so pin one
+      go-version: '1.25.x'

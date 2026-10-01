@@ -1,0 +1,18 @@
+name: Tag Push Checker
+
+on:
+  push:
+    tags:
+      - v*
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  releaser:
+    uses: ipdxco/unified-github-workflows/.github/workflows/tagpush.yml@d9b156f4be9fae6843707f5e5cda2fb079f821ac # v1.0.45

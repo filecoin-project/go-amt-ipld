@@ -8,11 +8,8 @@ import (
 
 	cid "github.com/ipfs/go-cid"
 	cbor "github.com/ipfs/go-ipld-cbor"
-	logging "github.com/ipfs/go-log"
 	cbg "github.com/whyrusleeping/cbor-gen"
 )
-
-var log = logging.Logger("amt")
 
 const (
 	// Width must be a power of 2. We set this to 8.
